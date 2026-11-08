@@ -2,7 +2,8 @@ package domain
 
 import (
 	"time"
-	"uuid"
+
+	"github.com/google/uuid"
 )
 
 type User struct {
@@ -11,21 +12,26 @@ type User struct {
 	PasswordHash string
 	FullName     string
 	IsActive     bool
-	CreatedAt    *time.Time
-	UpdatedAt    *time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 	DeletedAt    *time.Time
 }
 
-func NewUser(email string, passWordHash string) *User {
-	t := time.Now()
+type RegisterRequest struct {
+	Email    string `json:"email"    binding:"required,email"`
+	Password string `json:"password" binding:"required,min=8,max=72"`
+	FullName string `json:"full_name" binding:"required,min=1,max=100"`
+}
+
+func NewUser(email, passwordHash, fullName string) *User {
+	now := time.Now().UTC()
 	return &User{
 		ID:           uuid.New(),
 		Email:        email,
-		PasswordHash: passWordHash,
+		PasswordHash: passwordHash,
+		FullName:     fullName,
 		IsActive:     true,
-		CreatedAt:    &t,
-		UpdatedAt:    &t,
-		DeletedAt:    nil,
+		CreatedAt:    now,  
+		UpdatedAt:    now,
 	}
 }
-
