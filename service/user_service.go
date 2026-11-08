@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"UserManagementSystem/apperr"
+	"UserManagementSystem/internal/apperr"
 	"UserManagementSystem/domain"
 	"UserManagementSystem/repository"
 

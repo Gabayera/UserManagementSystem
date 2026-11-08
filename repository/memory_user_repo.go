@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"UserManagementSystem/apperr"
+	"UserManagementSystem/internal/apperr"
 	"UserManagementSystem/domain"
 
 	"github.com/google/uuid"
