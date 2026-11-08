@@ -1,4 +1,4 @@
-package ginapp
+package main
 
 import (
 	"errors"
@@ -47,15 +47,18 @@ func requestIDMiddleware() gin.HandlerFunc {
 func timingMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
-		c.Next() // run everything below, then return here
-		dur := time.Since(start)
-		fmt.Printf("req %s %s %s %d %s\n",
-			c.GetString("request_id"),
-			c.Request.Method,
-			c.FullPath(), // route TEMPLATE (/api/v1/items/:id), not raw path
-			c.Writer.Status(),
-			dur.Round(time.Microsecond),
-		)
+
+		defer func() {
+			dur := time.Since(start)
+			fmt.Printf("req %s %s %s %d %s\n",
+				c.GetString("request_id"),
+				c.Request.Method,
+				c.FullPath(),
+				c.Writer.Status(),
+				dur.Round(time.Microsecond),
+			)
+		}()
+		c.Next()
 	}
 }
 
