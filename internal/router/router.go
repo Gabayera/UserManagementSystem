@@ -3,6 +3,7 @@ package router
 import (
 	"UserManagementSystem/internal/handler"
 	"UserManagementSystem/internal/middleware"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -21,6 +22,12 @@ func New(health *handler.HealthHandler) *gin.Engine {
 
 	r.GET("/healthz", health.Healthz)
 	r.GET("/readyz", health.Readyz)
+	r.GET("/slow", func(c *gin.Context) {
+		time.Sleep(3 * time.Second)
+		c.JSON(200, gin.H{
+			"slow": "done",
+		})
+	})
 
 	return r
 }
