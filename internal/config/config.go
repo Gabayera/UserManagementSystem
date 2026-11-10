@@ -117,6 +117,8 @@ func Load() (*Config, error) {
 	}
 	switch strings.ToLower(logFormat) {
 	case "text", "json":
+		// valid — fall through to end of switch
+	default:
 		return nil, fmt.Errorf("config: LOG_FORMAT must be text|json, got %q", logFormat)
 	}
 
