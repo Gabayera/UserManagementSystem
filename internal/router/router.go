@@ -1,1 +1,26 @@
 package router
+
+import (
+	"UserManagementSystem/internal/handler"
+	"UserManagementSystem/internal/middleware"
+
+	"github.com/gin-gonic/gin"
+)
+
+func New(health *handler.HealthHandler) *gin.Engine {
+
+	gin.SetMode(gin.ReleaseMode)
+
+	r := gin.New()
+
+	_ = r.SetTrustedProxies(nil)
+
+	r.Use(middleware.RequestID())
+	r.Use(middleware.Logger())
+	r.Use(middleware.Recovery())
+
+	r.GET("/healthz", health.Healthz)
+	r.GET("/readyz", health.Readyz)
+
+	return r
+}
