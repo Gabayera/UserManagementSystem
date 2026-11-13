@@ -364,8 +364,11 @@ func ex12(ctx context.Context, e *env) error {
 	if got.Metadata["k"] != "v" || got.Metadata["n"] != float64(42) {
 		return fmt.Errorf("metadata not round-tripped: %#v", got.Metadata)
 	}
-	if got.IPAddress == nil || *got.IPAddress != ip {
-		return fmt.Errorf("ip not round-tripped: %v", got.IPAddress)
+	if got.IPAddress == nil {
+		return fmt.Errorf("ip not round-tripped: nil")
+	}
+	if *got.IPAddress != ip {
+		return fmt.Errorf("ip not round-tripped: got=%q want=%q", *got.IPAddress, ip)
 	}
 	fmt.Printf("audit: actor=%d entity=%d metadata=%v ip=%s\n",
 		len(byActor), len(byEntity), got.Metadata, *got.IPAddress)
