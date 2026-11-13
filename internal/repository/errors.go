@@ -1,25 +1,38 @@
 package repository
 
 import (
-	"UserManagementSystem/internal/apperr"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"UserManagementSystem/internal/apperr"
 )
 
+// MapError translates a pgx / pgconn error into an apperr sentinel (wrapped
+// so errors.Is works) or a wrapped raw error if the SQLSTATE isn't mapped.
+// Every repository method must call MapError on every non-nil error path.
 func MapError(err error) error {
 	if err == nil {
 		return nil
 	}
 
+	// pgx v5 has carried ErrNoRows across several internal representations
+	// over time (a bare sentinel in older versions, a *proxyErr wrapper in
+	// newer ones whose Is() compares two independently-constructed inner
+	// errors and can return false across instances). Match both errors.Is
+	// and the stable error text.
+	if errors.Is(err, pgx.ErrNoRows) || err.Error() == pgx.ErrNoRows.Error() {
+		return apperr.ErrNotFound
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("%w: %v", apperr.ErrTimeout, err)
 	}
-
 	if errors.Is(err, context.Canceled) {
+		// Caller cancelled — let the handler decide what to do.
 		return err
 	}
 
@@ -28,6 +41,7 @@ func MapError(err error) error {
 		return mapSQLState(pgErr)
 	}
 
+	// Unrecognized error — wrap, no sentinel. Becomes 500 at the HTTP layer.
 	return fmt.Errorf("repository: %w", err)
 }
 
