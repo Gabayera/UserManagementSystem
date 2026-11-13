@@ -14,7 +14,7 @@ func NewPGAuditLogRepo() *PGAuditLogRepo { return &PGAuditLogRepo{} }
 
 var _ AuditLogRepository = (*PGAuditLogRepo)(nil)
 
-const auditLogColumns = `id, actor_user_id, action, entity_type, entity_id, metadata, ip_address::text, request_id, created_at`
+const auditLogColumns = `id, actor_user_id, action, entity_type, entity_id, metadata, host(ip_address) AS ip_address, request_id, created_at`
 
 func scanAuditLog(s interface{ Scan(dest ...any) error }) (*domain.AuditLog, error) {
 	var l domain.AuditLog
@@ -87,4 +87,4 @@ func (r *PGAuditLogRepo) ListByEntity(ctx context.Context, q Querier, entityType
 		return nil, MapError(err)
 	}
 	return out, nil
-}	
+}

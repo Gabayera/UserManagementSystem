@@ -16,7 +16,7 @@ func NewPGRefreshTokenRepo() *PGRefreshTokenRepo { return &PGRefreshTokenRepo{} 
 
 var _ RefreshTokenRepository = (*PGRefreshTokenRepo)(nil)
 
-const refreshTokenColumns = `id, user_id, token_hash, family_id, expires_at, revoked_at, replaced_by, user_agent, ip_address::text, created_at`
+const refreshTokenColumns = `id, user_id, token_hash, family_id, expires_at, revoked_at, replaced_by, user_agent, host(ip_address) AS ip_address, created_at`
 
 func scanRefreshToken(s interface{ Scan(dest ...any) error }) (*domain.RefreshToken, error) {
 	var t domain.RefreshToken
