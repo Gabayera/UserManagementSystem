@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -84,7 +85,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 func (h *AuthHandler) Refresh(c *gin.Context) {
 	requestID := c.GetString(middleware.RequestIDKey)
-	raw := h.readRefreshToken(c)
+	raw, fromBody := h.readRefreshToken(c)
 	if raw == "" {
 		apiresp.Respond(c, apperr.ErrUnauthorized, requestID)
 		return
@@ -93,21 +94,25 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 	ip := c.ClientIP()
 	pair, err := h.auth.Refresh(c.Request.Context(), raw, &ua, &ip)
 	if err != nil {
-		// Clear the cookie on ANY failure — a stale cookie in the browser
-		// must not survive a failed refresh (revoked / expired / reuse).
-		h.clearRefreshCookie(c)
+		// Clear the cookie only when the token is definitively dead
+		// (revoked / expired / reuse / user gone → 401). A transient failure
+		// (DB down → 500/503/504) must NOT log the user out: the cookie is
+		// still valid and the client can simply retry.
+		if errors.Is(err, apperr.ErrUnauthorized) || errors.Is(err, apperr.ErrForbidden) {
+			h.clearRefreshCookie(c)
+		}
 		apiresp.Respond(c, err, requestID)
 		return
 	}
 	h.setRefreshCookie(c, pair.RefreshToken)
-	c.JSON(http.StatusOK, toRefreshResponse(pair))
+	c.JSON(http.StatusOK, toRefreshResponse(pair, fromBody))
 }
 
 // Logout is idempotent — always returns 204 regardless of cookie state or
 // service outcome. Service errors are swallowed (already logged inside), and
 // the client always sees its cookie cleared.
 func (h *AuthHandler) Logout(c *gin.Context) {
-	raw := h.readRefreshToken(c)
+	raw, _ := h.readRefreshToken(c)
 	_ = h.auth.Logout(c.Request.Context(), raw)
 	h.clearRefreshCookie(c)
 	c.Status(http.StatusNoContent)
@@ -168,15 +173,16 @@ func (h *AuthHandler) clearRefreshCookie(c *gin.Context) {
 }
 
 // readRefreshToken checks the cookie first (browser path), then a JSON body
-// (native client path). Returns "" if neither is present — the caller decides
-// what to do with that.
-func (h *AuthHandler) readRefreshToken(c *gin.Context) string {
+// (native client path). fromBody reports which transport supplied the token so
+// the caller can answer on the same channel. Returns ("", false) if neither is
+// present — the caller decides what to do with that.
+func (h *AuthHandler) readRefreshToken(c *gin.Context) (token string, fromBody bool) {
 	if v, err := c.Cookie(refreshCookieName); err == nil && v != "" {
-		return v
+		return v, false
 	}
 	var body dto.RefreshRequest
-	if err := c.ShouldBindJSON(&body); err == nil {
-		return body.RefreshToken
+	if err := c.ShouldBindJSON(&body); err == nil && body.RefreshToken != "" {
+		return body.RefreshToken, true
 	}
-	return ""
+	return "", false
 }
