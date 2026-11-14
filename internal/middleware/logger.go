@@ -25,9 +25,19 @@ func Logger() gin.HandlerFunc {
 				"status", c.Writer.Status(),
 				"duration_ms", time.Since(start).Milliseconds(),
 				"request_id", c.GetString(RequestIDKey),
-				"user_id", c.GetString(UserIDKey),
+				"user_id", userIDString(c),
 				"client_ip", c.ClientIP())
 		}()
 		c.Next()
 	}
+}
+
+// userIDString reads the typed user ID from context. Returns "" when the
+// request is unauthenticated. Never logs the UUID as a raw interface{} —
+// it's always the canonical 36-char string.
+func userIDString(c *gin.Context) string {
+	if id, ok := UserIDFromContext(c); ok {
+		return id.String()
+	}
+	return ""
 }
