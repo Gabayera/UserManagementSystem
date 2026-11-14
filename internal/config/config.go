@@ -164,6 +164,13 @@ func Load() (*Config, error) {
 	}
 	cookieDomain := os.Getenv("COOKIE_DOMAIN")
 
+	if cookieDomain != "" && !isValidHostname(cookieDomain) {
+		return nil, fmt.Errorf(
+			"config: COOKIE_DOMAIN=%q is not a valid hostname "+
+				"(this may indicate a corrupted .env — check for missing newlines)",
+			cookieDomain)
+	}
+
 	return &Config{
 		App: AppConfig{Env: env},
 		Server: ServerConfig{
@@ -278,4 +285,25 @@ func optBool(key string, def bool) (bool, error) {
 		return false, fmt.Errorf("config: %s must be true/false: %w", key, err)
 	}
 	return b, nil
+}
+
+// isValidHostname accepts an empty string (host-only cookie) or a
+// hostname that passes basic sanity checks: no equals, no spaces, no
+// slashes, no colons (port is not allowed in Cookie.Domain).
+func isValidHostname(s string) bool {
+	if s == "" {
+		return true
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '.', r == '-':
+			// ok
+		default:
+			return false
+		}
+	}
+	return len(s) < 254 && !strings.HasPrefix(s, ".") && !strings.HasSuffix(s, ".")
 }
