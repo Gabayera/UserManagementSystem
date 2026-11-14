@@ -3,30 +3,26 @@ package middleware
 import (
 	"io"
 	"log/slog"
-	"net/http"
 	"runtime/debug"
 
 	"github.com/gin-gonic/gin"
+
+	"UserManagementSystem/internal/apiresp"
 )
 
-// Recovery converts panics into 500 responses with our error envelope and a
-// structured slog line. io.Discard suppresses Gin's default printer, which
-// dumps a raw stack trace to stderr — we want structured logs, not raw dumps.
+// Recovery converts panics into 500 responses through apiresp — the same
+// choke point every other error uses. io.Discard suppresses Gin's default
+// panic printer; we emit one structured slog line and one JSON body instead.
 func Recovery() gin.HandlerFunc {
 	return gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, recovered any) {
+		requestID := c.GetString(RequestIDKey)
 		slog.Error("panic_recovered",
-			"request_id", c.GetString(RequestIDKey),
+			"request_id", requestID,
 			"path", c.FullPath(),
 			"panic", recovered,
-			// Stack is logged server-side only; never returned to the client.
 			"stack", string(debug.Stack()),
 		)
-
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{
-				"code":    "internal",
-				"message": "internal error",
-			},
-		})
+		apiresp.RespondInternal(c, requestID)
+		c.Abort()
 	})
 }
