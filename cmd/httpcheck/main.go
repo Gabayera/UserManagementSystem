@@ -71,11 +71,15 @@ func main() {
 		log.Fatalf("auth svc: %v", err)
 	}
 
-	r := router.New(
+	r, err := router.New(
 		handler.NewHealthHandler(pool),
 		handler.NewAuthHandler(authSvc, cfg.Auth, cfg.Cookie),
 		security.JWTVerifierAdapter{Issuer: jwtIssuer},
+		router.Options{},
 	)
+	if err != nil {
+		log.Fatalf("router: %v", err)
+	}
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
