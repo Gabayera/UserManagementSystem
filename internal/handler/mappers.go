@@ -31,12 +31,18 @@ func toLoginResponse(p *service.TokenPair) dto.LoginResponse {
 	}
 }
 
-func toRefreshResponse(p *service.TokenPair) dto.RefreshResponse {
-	return dto.RefreshResponse{
+// toRefreshResponse echoes the rotated refresh token only for body-based
+// (native) clients — see dto.RefreshResponse.
+func toRefreshResponse(p *service.TokenPair, includeRefreshToken bool) dto.RefreshResponse {
+	resp := dto.RefreshResponse{
 		AccessToken: p.AccessToken,
 		TokenType:   "Bearer",
 		ExpiresIn:   p.ExpiresIn,
 	}
+	if includeRefreshToken {
+		resp.RefreshToken = p.RefreshToken
+	}
+	return resp
 }
 
 func toUserView(u *domain.User) dto.UserView {
