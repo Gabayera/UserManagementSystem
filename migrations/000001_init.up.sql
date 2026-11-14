@@ -79,16 +79,16 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 
 
 -- Uniqueness of email applies only to live users. Soft-deleted rows are ignored.
-CREATE UNIQUE INDEX idx_users_email_active ON users(email) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_active ON users(email) WHERE deleted_at IS NULL;
 
-CREATE INDEX idx_refresh_tokens_user_id   ON refresh_tokens(user_id);
-CREATE INDEX idx_refresh_tokens_family_id ON refresh_tokens(family_id);
-CREATE INDEX idx_refresh_tokens_expires_at ON refresh_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id   ON refresh_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family_id ON refresh_tokens(family_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at ON refresh_tokens(expires_at);
 
-CREATE INDEX idx_audit_logs_actor_created ON audit_logs(actor_user_id, created_at DESC);
-CREATE INDEX idx_audit_logs_entity        ON audit_logs(entity_type, entity_id);
-CREATE INDEX idx_audit_logs_created       ON audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_created ON audit_logs(actor_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_entity        ON audit_logs(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created       ON audit_logs(created_at DESC);
 
 
-CREATE INDEX idx_user_roles_role_id            ON user_roles(role_id);
-CREATE INDEX idx_role_permissions_permission_id ON role_permissions(permission_id);
+CREATE INDEX IF NOT EXISTS idx_user_roles_role_id            ON user_roles(role_id);
+CREATE INDEX IF NOT EXISTS idx_role_permissions_permission_id ON role_permissions(permission_id);
