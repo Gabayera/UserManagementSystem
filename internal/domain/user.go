@@ -17,21 +17,16 @@ type User struct {
 	DeletedAt    *time.Time
 }
 
-type RegisterRequest struct {
-	Email    string `json:"email"    binding:"required,email"`
-	Password string `json:"password" binding:"required,min=8,max=72"`
-	FullName string `json:"full_name" binding:"required,min=1,max=100"`
-}
-
+// NewUser builds a new, active user. CreatedAt/UpdatedAt are intentionally
+// left zero: the database owns them (DEFAULT NOW()) and the repository's
+// Create fills them back in via RETURNING, so the value the caller sees is
+// exactly what was stored.
 func NewUser(email, passwordHash, fullName string) *User {
-	now := time.Now().UTC()
 	return &User{
 		ID:           uuid.New(),
 		Email:        email,
 		PasswordHash: passwordHash,
 		FullName:     fullName,
 		IsActive:     true,
-		CreatedAt:    now,  
-		UpdatedAt:    now,
 	}
 }
