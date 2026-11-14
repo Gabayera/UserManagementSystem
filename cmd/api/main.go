@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"UserManagementSystem/internal/config"
 	"UserManagementSystem/internal/database"
@@ -71,14 +72,22 @@ func main() {
 	verifier := security.JWTVerifierAdapter{Issuer: jwtIssuer}
 
 	// 9. Router.
-	r := router.New(healthH, authH, verifier)
+	r, err := router.New(healthH, authH, verifier, router.Options{
+		Prod:           cfg.App.IsProd(),
+		TrustedProxies: cfg.Server.TrustedProxies,
+	})
+	if err != nil {
+		slog.Error("router_init_failed", "err", err)
+		os.Exit(1)
+	}
 
 	// 10. HTTP server.
 	srv := &http.Server{
-		Addr:         cfg.Server.Addr,
-		Handler:      r,
-		ReadTimeout:  cfg.Server.ReadTimeout,
-		WriteTimeout: cfg.Server.WriteTimeout,
+		Addr:              cfg.Server.Addr,
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second, // Slowloris guard
+		ReadTimeout:       cfg.Server.ReadTimeout,
+		WriteTimeout:      cfg.Server.WriteTimeout,
 	}
 
 	go func() {
