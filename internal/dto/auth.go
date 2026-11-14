@@ -4,7 +4,7 @@ package dto
 // (uniqueness, password policy) live in the service.
 type RegisterRequest struct {
 	Email    string `json:"email"     binding:"required,email,max=320"`
-	Password string `json:"password"  binding:"required,min=8,max=72"`
+	Password string `json:"password"  binding:"required,min=8"`
 	FullName string `json:"full_name" binding:"required,min=1,max=100"`
 }
 
@@ -41,13 +41,16 @@ type LoginResponse struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-// RefreshResponse has NO refresh_token in the body — the cookie is the
-// source of truth. If a native client is talking to us, the refresh token
-// rotation must round-trip through the cookie header.
+// RefreshResponse carries the rotated refresh token in the body ONLY when the
+// client presented its old token in the body (native clients without cookie
+// support). Browser clients get the new token solely via the HttpOnly cookie.
+// Without this, a native client would be left holding a revoked token and the
+// next refresh would be treated as reuse, killing the whole token family.
 type RefreshResponse struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int    `json:"expires_in"`
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	RefreshToken string `json:"refresh_token,omitempty"`
 }
 
 // UserView deliberately omits password_hash and deleted_at. These fields
