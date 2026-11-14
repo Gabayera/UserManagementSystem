@@ -29,6 +29,9 @@ type ServerConfig struct {
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
 	ShutdownTimeout time.Duration
+	// TrustedProxies lists reverse-proxy IPs/CIDRs whose X-Forwarded-For is
+	// honoured by c.ClientIP(). Empty = trust nobody (use the TCP peer).
+	TrustedProxies []string
 }
 
 type DatabaseConfig struct {
@@ -98,6 +101,12 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if maxConns < 1 {
+		return nil, fmt.Errorf("config: DB_MAX_CONNS must be >= 1, got %d", maxConns)
+	}
+	if minConns > maxConns {
+		return nil, fmt.Errorf("config: DB_MIN_CONNS (%d) must be <= DB_MAX_CONNS (%d)", minConns, maxConns)
+	}
 	maxLifetime, err := optDuration("DB_MAX_CONN_LIFETIME", time.Hour)
 	if err != nil {
 		return nil, err
@@ -163,6 +172,7 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("config: COOKIE_SECURE must be true when APP_ENV=prod")
 	}
 	cookieDomain := os.Getenv("COOKIE_DOMAIN")
+	trustedProxies := splitCSV(os.Getenv("TRUSTED_PROXIES"))
 
 	if cookieDomain != "" && !isValidHostname(cookieDomain) {
 		return nil, fmt.Errorf(
@@ -178,6 +188,7 @@ func Load() (*Config, error) {
 			ReadTimeout:     readTimeout,
 			WriteTimeout:    writeTimeout,
 			ShutdownTimeout: shutdownTimeout,
+			TrustedProxies:  trustedProxies,
 		},
 		Database: DatabaseConfig{
 			URL:               dbURL,
@@ -204,22 +215,42 @@ func Load() (*Config, error) {
 	}, nil
 }
 
-// parseJWTSecret accepts base64 (standard or url), hex, or a raw ≥32-byte
-// string. The first encoding that yields ≥32 bytes wins.
+// parseJWTSecret accepts exactly the formats below, tried in this order so the
+// result is unambiguous (a 64-char hex string is also valid base64, so hex
+// MUST be tried first):
+//
+//  1. hex            — e.g. `openssl rand -hex 32` (>= 64 hex chars)
+//  2. base64         — std or raw-url, decoding to >= 32 bytes
+//  3. raw string     — >= 32 bytes (dev convenience only)
+//
+// Obvious placeholders (copied from .env.example) are rejected.
 func parseJWTSecret(raw string) ([]byte, error) {
+	if strings.Contains(strings.ToUpper(raw), "REPLACE") || strings.Contains(strings.ToUpper(raw), "CHANGE_ME") {
+		return nil, fmt.Errorf("config: JWT_SECRET is still a placeholder — generate one with `openssl rand -hex 32`")
+	}
+	if b, err := hex.DecodeString(raw); err == nil && len(b) >= 32 {
+		return b, nil
+	}
 	if b, err := base64.StdEncoding.DecodeString(raw); err == nil && len(b) >= 32 {
 		return b, nil
 	}
 	if b, err := base64.RawURLEncoding.DecodeString(raw); err == nil && len(b) >= 32 {
 		return b, nil
 	}
-	if b, err := hex.DecodeString(raw); err == nil && len(b) >= 32 {
-		return b, nil
-	}
 	if len(raw) >= 32 {
 		return []byte(raw), nil
 	}
 	return nil, fmt.Errorf("config: JWT_SECRET must decode to at least 32 bytes")
+}
+
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func mustEnv(key string) (string, error) {
@@ -265,9 +296,9 @@ func optInt32(key string, def int32) (int32, error) {
 	if !ok || v == "" {
 		return def, nil
 	}
-	n, err := strconv.Atoi(v)
+	n, err := strconv.ParseInt(v, 10, 32) // bitSize 32: out-of-range values error instead of wrapping
 	if err != nil {
-		return 0, fmt.Errorf("config: %s must be an integer: %w", key, err)
+		return 0, fmt.Errorf("config: %s must be a 32-bit integer: %w", key, err)
 	}
 	if n < 0 {
 		return 0, fmt.Errorf("config: %s must be >= 0, got %d", key, n)
