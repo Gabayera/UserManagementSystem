@@ -79,3 +79,13 @@ func logError(status int, code string, err error, requestID string) {
 		"request_id", requestID,
 		"status", status, "code", code)
 }
+
+// RespondInternal writes the generic 500 body. Used by middleware (Recovery)
+// that needs to signal a server-side failure without an error value. Any
+// caller that has an error should use Respond.
+func RespondInternal(c *gin.Context, requestID string) {
+	slog.Error("handler_internal_error", "request_id", requestID)
+	c.JSON(http.StatusInternalServerError, dto.ErrorEnvelope{
+		Error: dto.ErrorBody{Code: dto.CodeInternal, Message: "internal error"},
+	})
+}
