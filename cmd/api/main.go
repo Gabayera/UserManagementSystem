@@ -42,17 +42,14 @@ func main() {
 	}
 	defer pool.Close()
 
-	// 4. Auth primitives. The hasher pre-computes nothing at construction;
-	// the AuthService will hash a dummy value itself.
+	// 4. Auth primitives.
 	hasher := security.NewPasswordHasher(cfg.Auth.MaxConcurrentHashes)
 	jwtIssuer := security.NewJWTIssuer(cfg.Auth.JWTSecret, cfg.Auth.JWTIssuer, cfg.Auth.AccessTokenTTL)
 
-	// 5. Repositories.
+	// 5. Repositories and services.
 	userRepo := repository.NewPGUserRepo()
 	roleRepo := repository.NewPGRoleRepo()
 	tokenRepo := repository.NewPGRefreshTokenRepo()
-
-	// 6. Services. NoopAudit until Part 12.
 	auditSvc := service.NewNoopAudit()
 	authSvc, err := service.NewAuthService(
 		pool, userRepo, tokenRepo, roleRepo,
@@ -64,14 +61,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 7. Handlers.
+	// 6. Handlers and router.
 	healthH := handler.NewHealthHandler(pool)
 	authH := handler.NewAuthHandler(authSvc, cfg.Auth, cfg.Cookie)
-
-	// 8. Adapters — bridge the DIP seam.
 	verifier := security.JWTVerifierAdapter{Issuer: jwtIssuer}
-
-	// 9. Router.
 	r, err := router.New(healthH, authH, verifier, router.Options{
 		Prod:           cfg.App.IsProd(),
 		TrustedProxies: cfg.Server.TrustedProxies,
@@ -81,7 +74,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 10. HTTP server.
 	srv := &http.Server{
 		Addr:              cfg.Server.Addr,
 		Handler:           r,
