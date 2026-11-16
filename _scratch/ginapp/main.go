@@ -99,7 +99,6 @@ func main() {
 		})
 	})
 
-	
 	r.GET("/search", func(c *gin.Context) {
 		q := c.Query("q")
 		limitStr := c.DefaultQuery("limit", "10")
