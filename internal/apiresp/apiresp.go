@@ -89,3 +89,13 @@ func RespondInternal(c *gin.Context, requestID string) {
 		Error: dto.ErrorBody{Code: dto.CodeInternal, Message: "internal error"},
 	})
 }
+
+// RespondBadRequest writes a 400 response for malformed inputs the binding
+// layer can't catch — typically path params that fail to parse (e.g., a
+// non-UUID :id). Distinct from RespondValidation, which is 422.
+func RespondBadRequest(c *gin.Context, requestID, reason string) {
+	slog.Warn("handler_bad_request", "request_id", requestID, "reason", reason)
+	c.JSON(http.StatusBadRequest, dto.ErrorEnvelope{
+		Error: dto.ErrorBody{Code: dto.CodeInvalidInput, Message: "invalid input"},
+	})
+}
