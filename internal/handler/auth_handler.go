@@ -85,7 +85,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 func (h *AuthHandler) Refresh(c *gin.Context) {
 	requestID := c.GetString(middleware.RequestIDKey)
-	raw, _ := h.readRefreshToken(c)
+	raw, fromBody := h.readRefreshToken(c)
 	if raw == "" {
 		apiresp.Respond(c, apperr.ErrUnauthorized, requestID)
 		return
@@ -105,7 +105,14 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 		return
 	}
 	h.setRefreshCookie(c, pair.RefreshToken)
-	c.JSON(http.StatusOK, toRefreshResponse(pair))
+	resp := toRefreshResponse(pair)
+	if fromBody {
+		// Native client presented its token in the body, so it must receive
+		// the rotated token in the body too; otherwise its next refresh would
+		// reuse a revoked token and kill the whole family.
+		resp.RefreshToken = pair.RefreshToken
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // Logout is idempotent — always returns 204 regardless of cookie state or
@@ -145,6 +152,11 @@ func (h *AuthHandler) Me(c *gin.Context) {
 	}
 	out, err := h.auth.Me(c.Request.Context(), userID)
 	if err != nil {
+		// A valid token whose user was deleted is an authentication problem
+		// (401), not a missing resource (404).
+		if errors.Is(err, apperr.ErrNotFound) {
+			err = apperr.ErrUnauthorized
+		}
 		apiresp.Respond(c, err, requestID)
 		return
 	}
