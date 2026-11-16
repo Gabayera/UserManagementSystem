@@ -9,7 +9,7 @@ type UserListResponse struct {
 
 type CreateUserRequest struct {
 	Email    string `json:"email"     binding:"required,email,max=320"`
-	Password string `json:"password"  binding:"required,min=8,max=72"`
+	Password string `json:"password"  binding:"required,min=8,max=128"`
 	FullName string `json:"full_name" binding:"required,min=1,max=100"`
 }
 
