@@ -1,0 +1,33 @@
+# docker-compose.yml
+#
+# Pinned PostgreSQL for the project. Volume `um-pg-data` is external because
+# it was created by the previous `docker run` and reused by compose; declaring
+# it external silences the "was not created by Docker Compose" warning and
+# prevents compose from trying to delete it on `docker compose down -v`.
+#
+# Port 5433 (host) → 5432 (container) so it never collides with a system PG.
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: um-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: user_management
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - um-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d user_management"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  um-pg-data:
+    external: true
+    name: um-pg-data
