@@ -145,3 +145,12 @@ func (r *PGRoleRepo) PermissionsForRole(ctx context.Context, q Querier, roleID u
 	}
 	return out, nil
 }
+
+func (r *PGRoleRepo) CountUsersWithRole(ctx context.Context, q Querier, roleID uuid.UUID) (int, error) {
+	const sql = `SELECT count(*) FROM user_roles WHERE role_id = $1`
+	var n int
+	if err := q.QueryRow(ctx, sql, roleID).Scan(&n); err != nil {
+		return 0, MapError(err)
+	}
+	return n, nil
+}

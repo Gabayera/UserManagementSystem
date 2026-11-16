@@ -10,10 +10,7 @@ import (
 	"UserManagementSystem/internal/domain"
 )
 
-// Querier is satisfied by both *pgxpool.Pool and pgx.Tx. Every repository
-// method takes one so the caller decides whether work runs standalone or
-// inside a caller-owned transaction.
-//
+// Querier is satisfied by both *pgxpool.Pool and pgx.Tx.
 // Repositories NEVER call Begin/Commit/Rollback themselves.
 type Querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
@@ -21,13 +18,6 @@ type Querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// UserRepository is the persistence contract for users.
-//
-// Contract:
-//   - Read methods filter deleted_at IS NULL. Soft-deleted users are ErrNotFound.
-//   - Create returns (wrapped) ErrConflict on duplicate active email.
-//   - Update/SetActive/SoftDelete return ErrNotFound when RowsAffected == 0.
-//   - AssignRole/RemoveRole are idempotent (no error if already assigned/removed).
 type UserRepository interface {
 	GetByID(ctx context.Context, q Querier, id uuid.UUID) (*domain.User, error)
 	GetByEmail(ctx context.Context, q Querier, email string) (*domain.User, error)
@@ -43,7 +33,6 @@ type UserRepository interface {
 	PermissionsForUser(ctx context.Context, q Querier, userID uuid.UUID) ([]*domain.Permission, error)
 }
 
-// RoleRepository is the persistence contract for roles.
 type RoleRepository interface {
 	GetByID(ctx context.Context, q Querier, id uuid.UUID) (*domain.Role, error)
 	GetByName(ctx context.Context, q Querier, name string) (*domain.Role, error)
@@ -55,11 +44,12 @@ type RoleRepository interface {
 	AddPermission(ctx context.Context, q Querier, roleID, permissionID uuid.UUID) error
 	RemovePermission(ctx context.Context, q Querier, roleID, permissionID uuid.UUID) error
 	PermissionsForRole(ctx context.Context, q Querier, roleID uuid.UUID) ([]*domain.Permission, error)
+
+	// CountUsersWithRole returns how many user_roles rows reference this role.
+	// Used by RoleService.SoftDelete to refuse deleting a role still assigned.
+	CountUsersWithRole(ctx context.Context, q Querier, roleID uuid.UUID) (int, error)
 }
 
-// PermissionRepository is the persistence contract for permissions.
-//
-// Permissions are configuration: hard-delete, no soft delete.
 type PermissionRepository interface {
 	GetByID(ctx context.Context, q Querier, id uuid.UUID) (*domain.Permission, error)
 	GetByCode(ctx context.Context, q Querier, code string) (*domain.Permission, error)
@@ -67,14 +57,13 @@ type PermissionRepository interface {
 	Update(ctx context.Context, q Querier, p *domain.Permission) error
 	Delete(ctx context.Context, q Querier, id uuid.UUID) error
 	List(ctx context.Context, q Querier, limit, offset int) ([]*domain.Permission, int, error)
+
+	// CountRoleUsages returns how many role_permissions rows reference this
+	// permission. Used by PermissionService.Delete to refuse deleting a
+	// permission still granted to any role.
+	CountRoleUsages(ctx context.Context, q Querier, permissionID uuid.UUID) (int, error)
 }
 
-// RefreshTokenRepository is the persistence contract for session tokens.
-//
-// Contract:
-//   - Revoke* methods are idempotent (no error if already revoked).
-//   - Rotate MUST be called with a pgx.Tx. It fails with ErrNotFound if the
-//     old row is already revoked (reuse-detection signal for the caller).
 type RefreshTokenRepository interface {
 	Create(ctx context.Context, q Querier, t *domain.RefreshToken) error
 	GetByHash(ctx context.Context, q Querier, hash string) (*domain.RefreshToken, error)
@@ -84,7 +73,6 @@ type RefreshTokenRepository interface {
 	Rotate(ctx context.Context, q Querier, oldID uuid.UUID, newToken *domain.RefreshToken) error
 }
 
-// AuditLogRepository is the persistence contract for audit logs.
 type AuditLogRepository interface {
 	Create(ctx context.Context, q Querier, log *domain.AuditLog) error
 	ListByActor(ctx context.Context, q Querier, actorID uuid.UUID, limit, offset int) ([]*domain.AuditLog, error)

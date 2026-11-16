@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/google/uuid"
 
@@ -49,12 +48,15 @@ func (r *PGUserRepo) GetByEmail(ctx context.Context, q Querier, email string) (*
 	return u, nil
 }
 
-// Create inserts a new user. created_at/updated_at are DB-generated (NOW()).
-// Returns ErrConflict on duplicate live email.
+// Create inserts a new user. created_at/updated_at are DB-generated (NOW())
+// and written back into u via RETURNING. Returns ErrConflict on duplicate
+// live email.
 func (r *PGUserRepo) Create(ctx context.Context, q Querier, u *domain.User) error {
 	const sql = `INSERT INTO users (id, email, password_hash, full_name, is_active)
-	             VALUES ($1, $2, $3, $4, $5)`
-	_, err := q.Exec(ctx, sql, u.ID, u.Email, u.PasswordHash, u.FullName, u.IsActive)
+	             VALUES ($1, $2, $3, $4, $5)
+	             RETURNING created_at, updated_at`
+	err := q.QueryRow(ctx, sql, u.ID, u.Email, u.PasswordHash, u.FullName, u.IsActive).
+		Scan(&u.CreatedAt, &u.UpdatedAt)
 	return MapError(err)
 }
 
@@ -200,7 +202,3 @@ func (r *PGUserRepo) PermissionsForUser(ctx context.Context, q Querier, userID u
 	}
 	return out, nil
 }
-
-// ensure fmt is used (referenced by future expansions in this file, kept so
-// adding a WARN log inline stays a one-line change).
-var _ = fmt.Sprintf

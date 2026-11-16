@@ -36,6 +36,13 @@ type AuthService struct {
 	dummyHash string
 }
 
+// Password bounds are measured in BYTES (that is what Argon2 hashes). The
+// upper bound is NOT a bcrypt-style 72 limit; it only caps hashing cost.
+const (
+	minPasswordBytes = 8
+	maxPasswordBytes = 128
+)
+
 type RegisterInput struct {
 	Email    string
 	Password string
@@ -152,6 +159,12 @@ func (s *AuthService) Register(ctx context.Context, in RegisterInput) (*domain.U
 // verification succeeds.
 func (s *AuthService) Login(ctx context.Context, in LoginInput, ua, ip *string) (*TokenPair, error) {
 	email := strings.ToLower(strings.TrimSpace(in.Email))
+
+	// Reject absurd inputs before spending Argon2 time on them. Same error as
+	// a wrong password so the bound itself isn't an oracle.
+	if len(in.Password) > maxPasswordBytes || len(email) > 320 {
+		return nil, apperr.ErrUnauthorized
+	}
 
 	user, err := s.userRepo.GetByEmail(ctx, s.pool, email)
 	if err != nil {
@@ -272,6 +285,30 @@ func (s *AuthService) Refresh(ctx context.Context, rawToken string, ua, ip *stri
 		return nil, apperr.ErrUnauthorized
 	}
 
+	// The user must still exist and be active. Soft-deleted users surface as
+	// ErrNotFound; deactivated users have IsActive=false. In both cases the
+	// whole family is revoked so the token cannot be retried later.
+	user, err := s.userRepo.GetByID(ctx, s.pool, old.UserID)
+	if err != nil {
+		if errors.Is(err, apperr.ErrNotFound) {
+			_ = s.tokenRepo.RevokeByFamily(ctx, s.pool, old.FamilyID)
+			return nil, apperr.ErrUnauthorized
+		}
+		return nil, err
+	}
+	if !user.IsActive {
+		_ = s.tokenRepo.RevokeByFamily(ctx, s.pool, old.FamilyID)
+		s.auditBestEffort(ctx, AuditEntry{
+			ActorUserID: &old.UserID,
+			Action:      "auth.refresh.denied",
+			EntityType:  "user",
+			EntityID:    &old.UserID,
+			Metadata:    map[string]any{"reason": "inactive"},
+			IPAddress:   ip,
+		})
+		return nil, apperr.ErrUnauthorized
+	}
+
 	newRaw, newHash, err := security.GenerateRefreshToken()
 	if err != nil {
 		return nil, fmt.Errorf("auth: generate refresh: %w", err)
@@ -371,6 +408,10 @@ func (s *AuthService) Me(ctx context.Context, userID uuid.UUID) (*MeOutput, erro
 	if err != nil {
 		return nil, err
 	}
+	// A still-valid access token must not keep working for a deactivated user.
+	if !user.IsActive {
+		return nil, apperr.ErrUnauthorized
+	}
 	roles, err := s.userRepo.RolesForUser(ctx, s.pool, userID)
 	if err != nil {
 		return nil, err
@@ -398,8 +439,9 @@ func validateRegisterInput(in RegisterInput) (RegisterInput, error) {
 	if fullName == "" || len(fullName) > 100 {
 		return RegisterInput{}, apperr.Wrap(apperr.ErrValidation, "invalid full_name")
 	}
-	if len(in.Password) < 8 || len(in.Password) > 72 {
-		return RegisterInput{}, apperr.Wrap(apperr.ErrValidation, "password must be 8-72 chars")
+	if len(in.Password) < minPasswordBytes || len(in.Password) > maxPasswordBytes {
+		return RegisterInput{}, apperr.Wrap(apperr.ErrValidation,
+			"password must be %d-%d bytes", minPasswordBytes, maxPasswordBytes)
 	}
 	return RegisterInput{Email: email, Password: in.Password, FullName: fullName}, nil
 }

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -139,7 +138,3 @@ func decodePHC(phc string) (argonParams, []byte, []byte, error) {
 	}
 	return p, salt, key, nil
 }
-
-// compile-time guard: ensure errors package isn't accidentally unused if the
-// above is trimmed further later.
-var _ = errors.Is

@@ -11,8 +11,8 @@ var (
 	ErrUnauthorized = errors.New("unauthorized")
 	ErrForbidden    = errors.New("forbidden")
 	ErrValidation   = errors.New("validation")
-	ErrTimeout = errors.New("timeout")
-	ErrUnavailable = errors.New("unavailable")
+	ErrTimeout      = errors.New("timeout")
+	ErrUnavailable  = errors.New("unavailable")
 )
 
 func Wrap(base error, msg string, args ...any) error {
