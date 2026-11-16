@@ -31,6 +31,7 @@ func New(
 	r.Use(middleware.RequestID())
 	r.Use(middleware.Logger())
 	r.Use(middleware.Recovery())
+	r.Use(middleware.RequestContext())
 
 	// Ops probes — public, outside /api/v1.
 	r.GET("/healthz", health.Healthz)
