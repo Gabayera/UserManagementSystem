@@ -62,8 +62,9 @@ func (s *UserService) Create(ctx context.Context, in CreateUserInput) (*domain.U
 	if fullName == "" || len(fullName) > 100 {
 		return nil, apperr.Wrap(apperr.ErrValidation, "invalid full_name")
 	}
-	if len(in.Password) < 8 || len(in.Password) > 72 {
-		return nil, apperr.Wrap(apperr.ErrValidation, "password must be 8-72 chars")
+	if len(in.Password) < minPasswordBytes || len(in.Password) > maxPasswordBytes {
+		return nil, apperr.Wrap(apperr.ErrValidation,
+			"password must be %d-%d bytes", minPasswordBytes, maxPasswordBytes)
 	}
 
 	hash, err := s.hasher.Hash(ctx, in.Password)
