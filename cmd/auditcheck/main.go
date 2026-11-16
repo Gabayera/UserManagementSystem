@@ -133,16 +133,16 @@ func run() error {
 		name string
 		fn   func(*env) error
 	}{
-		{"01 register writes user.registered",          testRegister},
-		{"02 login success writes auth.login.success",  testLoginSuccess},
+		{"01 register writes user.registered", testRegister},
+		{"02 login success writes auth.login.success", testLoginSuccess},
 		{"03 login wrong password writes failed+actor", testLoginWrongPass},
-		{"04 login unknown email writes failed+nil",    testLoginUnknown},
-		{"05 refresh writes auth.refresh",              testRefresh},
-		{"06 logout writes auth.logout",                testLogout},
-		{"07 logout-all writes auth.logout_all",        testLogoutAll},
-		{"08 admin create user writes audit (actor)",   testAdminCreateUser},
-		{"09 admin create role writes audit",           testAdminCreateRole},
-		{"10 admin create perm writes audit",           testAdminCreatePerm},
+		{"04 login unknown email writes failed+nil", testLoginUnknown},
+		{"05 refresh writes auth.refresh", testRefresh},
+		{"06 logout writes auth.logout", testLogout},
+		{"07 logout-all writes auth.logout_all", testLogoutAll},
+		{"08 admin create user writes audit (actor)", testAdminCreateUser},
+		{"09 admin create role writes audit", testAdminCreateRole},
+		{"10 admin create perm writes audit", testAdminCreatePerm},
 	}
 
 	for _, t := range tests {
