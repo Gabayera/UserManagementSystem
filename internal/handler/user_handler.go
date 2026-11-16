@@ -3,12 +3,12 @@ package handler
 import (
 	"context"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	"UserManagementSystem/internal/apiresp"
-	"UserManagementSystem/internal/apperr"
 	"UserManagementSystem/internal/domain"
 	"UserManagementSystem/internal/dto"
 	"UserManagementSystem/internal/middleware"
@@ -48,17 +48,15 @@ func parsePagination(c *gin.Context) (limit, offset int, ok bool) {
 	limit = 20
 	offset = 0
 	if v := c.Query("limit"); v != "" {
-		n, err := atoiSafe(v)
+		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 || n > 100 {
 			apiresp.RespondBadRequest(c, c.GetString(middleware.RequestIDKey), "limit must be 1-100")
 			return 0, 0, false
 		}
 		limit = n
 	}
-	if v := c.GetString("offset"); v != "" { // will fail; use Query
-	}
 	if v := c.Query("offset"); v != "" {
-		n, err := atoiSafe(v)
+		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
 			apiresp.RespondBadRequest(c, c.GetString(middleware.RequestIDKey), "offset must be >= 0")
 			return 0, 0, false
@@ -66,19 +64,6 @@ func parsePagination(c *gin.Context) (limit, offset int, ok bool) {
 		offset = n
 	}
 	return limit, offset, true
-}
-
-// atoiSafe keeps strconv out of the handler's top-level imports at the cost
-// of one tiny helper. Alternative: import strconv directly.
-func atoiSafe(s string) (int, error) {
-	n := 0
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return 0, apperr.Wrap(apperr.ErrValidation, "not a number")
-		}
-		n = n*10 + int(r-'0')
-	}
-	return n, nil
 }
 
 // actorFromContext returns the authenticated user's UUID (for audit), or nil
