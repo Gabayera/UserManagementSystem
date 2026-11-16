@@ -17,18 +17,22 @@ func Logger() gin.HandlerFunc {
 		start := time.Now()
 
 		defer func() {
+			path := c.FullPath()
+			if path == "" {
+				// NoRoute fired — no template exists. Log a stable marker instead of
+				// an empty string, so 404s are visible and not lost in log noise.
+				path = "unmatched"
+			}
 			slog.Info("http_request",
 				"method", c.Request.Method,
-				// path is the route TEMPLATE (/users/:id), never the raw path —
-				// raw paths explode log cardinality and can include user input.
-				"path", c.FullPath(),
+				"path", path,
 				"status", c.Writer.Status(),
 				"duration_ms", time.Since(start).Milliseconds(),
 				"request_id", c.GetString(RequestIDKey),
 				"user_id", userIDString(c),
-				"client_ip", c.ClientIP())
+				"client_ip", c.ClientIP(),
+			)
 		}()
-		c.Next()
 	}
 }
 
