@@ -12,8 +12,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"UserManagementSystem/internal/config"
 )
 
 var (
@@ -25,12 +23,13 @@ const testSchema = "repo_test"
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
-	cfg, err := config.Load()
-	if err != nil {
-		log.Fatalf("config: %v", err)
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL is required for repository integration tests")
 	}
 
-	adminPool, err = pgxpool.New(ctx, cfg.Database.URL)
+	var err error
+	adminPool, err = pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		log.Fatalf("admin pool: %v", err)
 	}
@@ -49,7 +48,7 @@ func TestMain(m *testing.M) {
 		log.Fatalf("create citext: %v", err)
 	}
 
-	testPool, err = newTestPool(ctx, cfg.Database.URL, testSchema)
+	testPool, err = newTestPool(ctx, databaseURL, testSchema)
 	if err != nil {
 		log.Fatalf("test pool: %v", err)
 	}
@@ -99,6 +98,7 @@ func applyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		"000001_init.up.sql",
 		"000002_seed_rbac.up.sql",
 		"000003_split_user_read.up.sql",
+		"000004_roles_name_unique_active.up.sql",
 	}
 	for _, f := range files {
 		b, err := os.ReadFile(filepath.Join(migrationsDir, f))
