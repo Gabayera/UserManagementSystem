@@ -72,9 +72,6 @@ func main() {
 	verifier := security.JWTVerifierAdapter{Issuer: jwtIssuer}
 
 	// 9. Router.
-<<<<<<< HEAD
-	r := router.New(healthH, authH, verifier)
-=======
 	r, err := router.New(healthH, authH, verifier, router.Options{
 		Prod:           cfg.App.IsProd(),
 		TrustedProxies: cfg.Server.TrustedProxies,
@@ -83,7 +80,6 @@ func main() {
 		slog.Error("router_init_failed", "err", err)
 		os.Exit(1)
 	}
->>>>>>> recovered
 
 	// 10. HTTP server.
 	srv := &http.Server{
