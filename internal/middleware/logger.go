@@ -9,9 +9,11 @@ import (
 
 // Logger emits exactly one structured log line per completed request.
 //
-// Ordering note (Part 2 correction): Logger runs OUTSIDE Recovery so it sees
-// the final status Recovery writes on a panic. Its "after" code must be in a
-// defer, otherwise it never runs when c.Next() panics.
+// CRITICAL: slog.Info MUST live inside the deferred block, AFTER c.Next()
+// has returned. If placed above c.Next() it reads stale values
+// (status=200, user_id="", duration_ms=0) — TD-21. The defer also runs
+// during panic unwinding so panicked requests get their status=500 line
+// before Recovery writes the final body.
 func Logger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -19,8 +21,8 @@ func Logger() gin.HandlerFunc {
 		defer func() {
 			path := c.FullPath()
 			if path == "" {
-				// NoRoute fired — no template exists. Log a stable marker instead of
-				// an empty string, so 404s are visible and not lost in log noise.
+				// NoRoute fired — no template exists. Use a stable
+				// marker so 404s don't disappear into log noise.
 				path = "unmatched"
 			}
 			slog.Info("http_request",
@@ -33,12 +35,15 @@ func Logger() gin.HandlerFunc {
 				"client_ip", c.ClientIP(),
 			)
 		}()
+
+		c.Next()
 	}
 }
 
-// userIDString reads the typed user ID from context. Returns "" when the
-// request is unauthenticated. Never logs the UUID as a raw interface{} —
-// it's always the canonical 36-char string.
+// userIDString reads the typed uuid.UUID from the Gin context. Gin's
+// GetString returns "" when the stored value is a uuid.UUID (not a string),
+// which would silently strip user_id from every authenticated log line.
+// This helper type-asserts via UserIDFromContext and formats canonically.
 func userIDString(c *gin.Context) string {
 	if id, ok := UserIDFromContext(c); ok {
 		return id.String()
