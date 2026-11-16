@@ -10,9 +10,6 @@ import (
 
 const rfc3339 = time.RFC3339
 
-// Pure domain → DTO mappers. No I/O, no gin, no service calls. Handlers
-// compose these; the dto package never imports domain.
-
 func toRegisterResponse(u *domain.User) dto.RegisterResponse {
 	return dto.RegisterResponse{
 		ID:        u.ID.String(),
@@ -31,18 +28,12 @@ func toLoginResponse(p *service.TokenPair) dto.LoginResponse {
 	}
 }
 
-// toRefreshResponse echoes the rotated refresh token only for body-based
-// (native) clients — see dto.RefreshResponse.
-func toRefreshResponse(p *service.TokenPair, includeRefreshToken bool) dto.RefreshResponse {
-	resp := dto.RefreshResponse{
+func toRefreshResponse(p *service.TokenPair) dto.RefreshResponse {
+	return dto.RefreshResponse{
 		AccessToken: p.AccessToken,
 		TokenType:   "Bearer",
 		ExpiresIn:   p.ExpiresIn,
 	}
-	if includeRefreshToken {
-		resp.RefreshToken = p.RefreshToken
-	}
-	return resp
 }
 
 func toUserView(u *domain.User) dto.UserView {
@@ -65,17 +56,49 @@ func toPermissionView(p *domain.Permission) dto.PermissionView {
 }
 
 func toMeResponse(out *service.MeOutput) dto.MeResponse {
-	roles := make([]dto.RoleView, 0, len(out.Roles))
-	for _, r := range out.Roles {
-		roles = append(roles, toRoleView(r))
-	}
-	perms := make([]dto.PermissionView, 0, len(out.Permissions))
-	for _, p := range out.Permissions {
-		perms = append(perms, toPermissionView(p))
-	}
 	return dto.MeResponse{
 		User:        toUserView(out.User),
-		Roles:       roles,
-		Permissions: perms,
+		Roles:       toRoleViews(out.Roles),
+		Permissions: toPermissionViews(out.Permissions),
 	}
+}
+
+func toUserListResponse(users []*domain.User, total, limit, offset int) dto.UserListResponse {
+	views := make([]dto.UserView, 0, len(users))
+	for _, u := range users {
+		views = append(views, toUserView(u))
+	}
+	return dto.UserListResponse{Users: views, Total: total, Limit: limit, Offset: offset}
+}
+
+func toRoleListResponse(roles []*domain.Role, total, limit, offset int) dto.RoleListResponse {
+	views := make([]dto.RoleView, 0, len(roles))
+	for _, r := range roles {
+		views = append(views, toRoleView(r))
+	}
+	return dto.RoleListResponse{Roles: views, Total: total, Limit: limit, Offset: offset}
+}
+
+func toPermissionListResponse(perms []*domain.Permission, total, limit, offset int) dto.PermissionListResponse {
+	views := make([]dto.PermissionView, 0, len(perms))
+	for _, p := range perms {
+		views = append(views, toPermissionView(p))
+	}
+	return dto.PermissionListResponse{Permissions: views, Total: total, Limit: limit, Offset: offset}
+}
+
+func toRoleViews(rs []*domain.Role) []dto.RoleView {
+	out := make([]dto.RoleView, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, toRoleView(r))
+	}
+	return out
+}
+
+func toPermissionViews(ps []*domain.Permission) []dto.PermissionView {
+	out := make([]dto.PermissionView, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, toPermissionView(p))
+	}
+	return out
 }

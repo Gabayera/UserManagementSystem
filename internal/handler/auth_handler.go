@@ -85,7 +85,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 func (h *AuthHandler) Refresh(c *gin.Context) {
 	requestID := c.GetString(middleware.RequestIDKey)
-	raw, fromBody := h.readRefreshToken(c)
+	raw, _ := h.readRefreshToken(c)
 	if raw == "" {
 		apiresp.Respond(c, apperr.ErrUnauthorized, requestID)
 		return
@@ -105,7 +105,7 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 		return
 	}
 	h.setRefreshCookie(c, pair.RefreshToken)
-	c.JSON(http.StatusOK, toRefreshResponse(pair, fromBody))
+	c.JSON(http.StatusOK, toRefreshResponse(pair))
 }
 
 // Logout is idempotent — always returns 204 regardless of cookie state or
