@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"UserManagementSystem/internal/config"
 	"UserManagementSystem/internal/database"
@@ -22,7 +21,6 @@ import (
 )
 
 func main() {
-	// 1. Load config first — no logger yet, stderr on failure.
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "startup: %v\n", err)
@@ -30,11 +28,9 @@ func main() {
 	}
 	setupLogger(cfg.Log)
 
-	// 2. Root context cancelled on SIGINT/SIGTERM.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// 3. Database pool. Fail fast — never start without a DB.
 	pool, err := database.NewPool(ctx, cfg.Database)
 	if err != nil {
 		slog.Error("db_init_failed", "err", err)
@@ -42,18 +38,17 @@ func main() {
 	}
 	defer pool.Close()
 
-	// 4. Auth primitives. The hasher pre-computes nothing at construction;
-	// the AuthService will hash a dummy value itself.
 	hasher := security.NewPasswordHasher(cfg.Auth.MaxConcurrentHashes)
 	jwtIssuer := security.NewJWTIssuer(cfg.Auth.JWTSecret, cfg.Auth.JWTIssuer, cfg.Auth.AccessTokenTTL)
 
-	// 5. Repositories.
 	userRepo := repository.NewPGUserRepo()
 	roleRepo := repository.NewPGRoleRepo()
+	permRepo := repository.NewPGPermissionRepo()
 	tokenRepo := repository.NewPGRefreshTokenRepo()
+	auditRepo := repository.NewPGAuditLogRepo()
 
-	// 6. Services. NoopAudit until Part 12.
-	auditSvc := service.NewNoopAudit()
+	auditSvc := service.NewRealAudit(pool, auditRepo)
+
 	authSvc, err := service.NewAuthService(
 		pool, userRepo, tokenRepo, roleRepo,
 		hasher, jwtIssuer, auditSvc,
@@ -64,33 +59,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 7. Handlers.
-	healthH := handler.NewHealthHandler(pool)
-	authH := handler.NewAuthHandler(authSvc, cfg.Auth, cfg.Cookie)
-
 	userSvc := service.NewUserService(pool, userRepo, roleRepo, hasher, auditSvc)
-	userH := handler.NewUserHandler(userSvc)
-
-	permRepo := repository.NewPGPermissionRepo()
 	roleSvc := service.NewRoleService(pool, roleRepo, auditSvc)
 	permSvc := service.NewPermissionService(pool, permRepo, auditSvc)
-	roleH := handler.NewRoleHandler(roleSvc)
-	permH := handler.NewPermissionHandler(permSvc)
-
 	resolver := service.NewDBPermissionsResolver(pool, userRepo)
-	// 8. Adapters — bridge the DIP seam.
 	verifier := security.JWTVerifierAdapter{Issuer: jwtIssuer}
 
-	// 9. Router.
-	r := router.New(healthH, authH, userH, roleH, permH, verifier, resolver)
+	r := router.New(
+		handler.NewHealthHandler(pool),
+		handler.NewAuthHandler(authSvc, cfg.Auth, cfg.Cookie),
+		handler.NewUserHandler(userSvc),
+		handler.NewRoleHandler(roleSvc),
+		handler.NewPermissionHandler(permSvc),
+		verifier, resolver,
+	)
 
-	// 10. HTTP server.
 	srv := &http.Server{
-		Addr:              cfg.Server.Addr,
-		Handler:           r,
-		ReadHeaderTimeout: 5 * time.Second, // Slowloris guard
-		ReadTimeout:       cfg.Server.ReadTimeout,
-		WriteTimeout:      cfg.Server.WriteTimeout,
+		Addr:         cfg.Server.Addr,
+		Handler:      r,
+		ReadTimeout:  cfg.Server.ReadTimeout,
+		WriteTimeout: cfg.Server.WriteTimeout,
 	}
 
 	go func() {
