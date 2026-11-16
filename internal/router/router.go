@@ -60,16 +60,16 @@ func New(
 	}
 
 	// Users
-	protected.GET("/users", req("user.read"), user.List)
+	protected.GET("/users", req("user.read.all"), user.List)
 	protected.POST("/users", req("user.create"), user.Create)
-	protected.GET("/users/:id", req("user.read"), user.GetByID)
+	protected.GET("/users/:id", req("user.read.all"), user.GetByID)
 	protected.PATCH("/users/:id", req("user.update"), user.Update)
 	protected.DELETE("/users/:id", req("user.delete"), user.Delete)
 	protected.PATCH("/users/:id/status", req("user.update"), user.SetStatus)
-	protected.GET("/users/:id/roles", req("user.read"), user.ListRoles)
+	protected.GET("/users/:id/roles", req("user.read.all"), user.ListRoles)
 	protected.POST("/users/:id/roles", req("user.update"), user.AssignRole)
 	protected.DELETE("/users/:id/roles/:roleId", req("user.update"), user.RemoveRole)
-	protected.GET("/users/:id/permissions", req("user.read"), user.ListPermissions)
+	protected.GET("/users/:id/permissions", req("user.read.all"), user.ListPermissions)
 
 	// Roles
 	protected.GET("/roles", req("role.read"), role.List)

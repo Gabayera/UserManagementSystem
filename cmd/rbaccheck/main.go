@@ -101,12 +101,12 @@ func main() {
 		{"08 add test.read twice (idempotent)", ex08},
 		{"09 resolver shows test.read", ex09},
 		{"10 add user.read to test_role", ex10},
-		{"11 resolver shows {test.read,user.read}", ex11},
+		{"11 resolver shows {test.read,user.read.all}", ex11},
 		{"12 assign editor to user", ex12},
 		{"13 resolver shows union", ex13},
 		{"14 delete test.read while granted", ex14},
 		{"15 remove test.read from test_role", ex15},
-		{"16 resolver shows {user.read,user.update}", ex16},
+		{"16 resolver shows {user.read.all,user.read.self,user.update}", ex16},
 		{"17 delete test.read", ex17},
 		{"18 GetByCode test.read not found", ex18},
 		{"19 soft-delete test_role while user in role", ex19},
@@ -219,13 +219,13 @@ func ex02(e *env) error {
 	}
 	found := false
 	for _, p := range perms {
-		if p.Code == "user.read" {
+		if p.Code == "user.read.all" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		return fmt.Errorf("missing user.read permission")
+		return fmt.Errorf("missing user.read.all permission")
 	}
 	fmt.Printf("permissions: total=%d\n", total)
 	return nil
@@ -321,7 +321,7 @@ func ex09(e *env) error {
 }
 
 func ex10(e *env) error {
-	userRead, err := e.permSvc.GetByCode(e.ctx, "user.read")
+	userRead, err := e.permSvc.GetByCode(e.ctx, "user.read.all")
 	if err != nil {
 		return err
 	}
@@ -333,7 +333,7 @@ func ex11(e *env) error {
 	if err != nil {
 		return err
 	}
-	if err := exactly(perms, "test.read", "user.read"); err != nil {
+	if err := exactly(perms, "test.read", "user.read.all"); err != nil {
 		return err
 	}
 	fmt.Printf("resolver: %v\n", permKeys(perms))
@@ -353,7 +353,7 @@ func ex13(e *env) error {
 	if err != nil {
 		return err
 	}
-	if err := exactly(perms, "test.read", "user.read", "user.update"); err != nil {
+	if err := exactly(perms, "test.read", "user.read.all", "user.read.self", "user.update"); err != nil {
 		return err
 	}
 	fmt.Printf("resolver: %v\n", permKeys(perms))
@@ -382,7 +382,7 @@ func ex16(e *env) error {
 	if err != nil {
 		return err
 	}
-	if err := exactly(perms, "user.read", "user.update"); err != nil {
+	if err := exactly(perms, "user.read.all", "user.read.self", "user.update"); err != nil {
 		return err
 	}
 	fmt.Printf("resolver: %v\n", permKeys(perms))

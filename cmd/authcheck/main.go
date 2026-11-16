@@ -339,8 +339,8 @@ func ex13(ctx context.Context, e *env) error {
 	if len(roleNames) != 1 || roleNames[0] != "user" {
 		return fmt.Errorf("expected roles=[user], got %v", roleNames)
 	}
-	if len(permCodes) != 1 || permCodes[0] != "user.read" {
-		return fmt.Errorf("expected perms=[user.read], got %v", permCodes)
+	if len(permCodes) != 1 || permCodes[0] != "user.read.self" {
+		return fmt.Errorf("expected perms=[user.read.self], got %v", permCodes)
 	}
 	fmt.Printf("me: id=%s roles=%v perms=%v\n", me.User.ID, roleNames, permCodes)
 	return nil

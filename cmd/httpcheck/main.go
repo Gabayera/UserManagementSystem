@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,20 +24,28 @@ import (
 )
 
 const (
-	testEmail    = "httpcheck@example.com"
-	testPassword = "correct-horse-battery-staple"
-	cookieName   = "refresh_token"
+	adminEmail  = "hc2-admin@example.com"
+	editorEmail = "hc2-editor@example.com"
+	userEmail   = "hc2-user@example.com"
+	sharedPass  = "correct-horse-battery-staple"
 )
 
-type testEnv struct {
-	ctx                context.Context
-	pool               *pgxpool.Pool
-	client             *http.Client
-	base               string
-	server             *httptest.Server
-	refreshToken       string // live
-	previousRefreshTok string // pre-rotation, for reuse test
-	accessToken        string
+type env struct {
+	ctx      context.Context
+	pool     *pgxpool.Pool
+	client   *http.Client
+	base     string
+	srv      *httptest.Server
+	roleRepo *repository.PGRoleRepo
+	userRepo repository.UserRepository
+
+	adminTok  string
+	editorTok string
+	userTok   string
+
+	adminID  string
+	editorID string
+	userID   string
 }
 
 func main() {
@@ -48,7 +55,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-
 	pool, err := database.NewPool(ctx, cfg.Database)
 	if err != nil {
 		log.Fatalf("db: %v", err)
@@ -57,38 +63,43 @@ func main() {
 
 	hasher := security.NewPasswordHasher(cfg.Auth.MaxConcurrentHashes)
 	jwtIssuer := security.NewJWTIssuer(cfg.Auth.JWTSecret, cfg.Auth.JWTIssuer, cfg.Auth.AccessTokenTTL)
-	auditSvc := service.NewNoopAudit()
+	userRepo := repository.NewPGUserRepo()
+	roleRepo := repository.NewPGRoleRepo()
+	permRepo := repository.NewPGPermissionRepo()
+	tokenRepo := repository.NewPGRefreshTokenRepo()
+	audit := service.NewNoopAudit()
 
 	authSvc, err := service.NewAuthService(
-		pool,
-		repository.NewPGUserRepo(),
-		repository.NewPGRefreshTokenRepo(),
-		repository.NewPGRoleRepo(),
-		hasher, jwtIssuer, auditSvc,
+		pool, userRepo, tokenRepo, roleRepo, hasher, jwtIssuer, audit,
 		cfg.Auth.AccessTokenTTL, cfg.Auth.RefreshTokenTTL,
 	)
 	if err != nil {
 		log.Fatalf("auth svc: %v", err)
 	}
 
-	r, err := router.New(
+	userSvc := service.NewUserService(pool, userRepo, roleRepo, hasher, audit)
+	roleSvc := service.NewRoleService(pool, roleRepo, audit)
+	permSvc := service.NewPermissionService(pool, permRepo, audit)
+	resolver := service.NewDBPermissionsResolver(pool, userRepo)
+	verifier := security.JWTVerifierAdapter{Issuer: jwtIssuer}
+
+	r := router.New(
 		handler.NewHealthHandler(pool),
 		handler.NewAuthHandler(authSvc, cfg.Auth, cfg.Cookie),
-		security.JWTVerifierAdapter{Issuer: jwtIssuer},
-		router.Options{},
+		handler.NewUserHandler(userSvc),
+		handler.NewRoleHandler(roleSvc),
+		handler.NewPermissionHandler(permSvc),
+		verifier,
+		resolver,
 	)
-	if err != nil {
-		log.Fatalf("router: %v", err)
-	}
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
-	env := &testEnv{
-		ctx:    ctx,
-		pool:   pool,
+	e := &env{
+		ctx: ctx, pool: pool,
 		client: &http.Client{Timeout: 5 * time.Second},
-		base:   srv.URL,
-		server: srv,
+		base:   srv.URL, srv: srv,
+		roleRepo: roleRepo, userRepo: userRepo,
 	}
 
 	if err := cleanup(ctx, pool); err != nil {
@@ -96,505 +107,567 @@ func main() {
 	}
 	defer func() { _ = cleanup(context.Background(), pool) }()
 
+	if err := setupFixtures(ctx, e, authSvc); err != nil {
+		log.Fatalf("setup: %v", err)
+	}
+
 	tests := []struct {
 		name string
-		fn   func(*testEnv) error
+		fn   func(*env) error
 	}{
-		{"01 register happy", test01},
-		{"02 register duplicate", test02},
-		{"03 register invalid email", test03},
-		{"04 register short password", test04},
-		{"05 login correct", test05},
-		{"06 login wrong password", test06},
-		{"07 me with bearer", test07},
-		{"08 me no auth", test08},
-		{"09 me garbage bearer", test09},
-		{"10 me basic auth scheme", test10},
-		{"11 refresh rotates", test11},
-		{"12 refresh revoked cookie", test12},
-		{"13 logout", test13},
-		{"14 refresh after logout", test14},
-		{"15 logout-all", test15},
-		{"16 refresh after logout-all", test16},
-		{"17 logout-all no auth", test17},
+		{"A.01 all protected routes → 401 without auth", sectionA},
+		{"B.01 admin passes every protected route", sectionB},
+		{"C.01 editor forbidden on role/permission routes", sectionC1},
+		{"C.02 editor forbidden on user.create/delete", sectionC2},
+		{"C.03 user forbidden on user.update/delete", sectionC3},
+		{"D.01 NoRoute → 404 envelope", sectionD1},
+		{"D.02 malformed UUID → 400 not 404", sectionD2},
+		{"E.01 create user via admin", sectionE1},
+		{"E.02 get created user", sectionE2},
+		{"E.03 update user full_name", sectionE3},
+		{"E.04 deactivate + reactivate", sectionE4},
+		{"E.05 list user roles", sectionE5},
+		{"E.06 assign + remove role", sectionE6},
+		{"E.07 delete user", sectionE7},
+		{"E.08 deleted user → 404", sectionE8},
+		{"F.01 create test role", sectionF1},
+		{"F.02 update test role", sectionF2},
+		{"F.03 add + list + remove permission", sectionF3},
+		{"F.04 delete test role", sectionF4},
+		{"G.01 create test permission", sectionG1},
+		{"G.02 update test permission", sectionG2},
+		{"G.03 delete test permission", sectionG3},
 	}
 
 	for _, t := range tests {
 		fmt.Printf("=== %s ===\n", t.name)
-		if err := t.fn(env); err != nil {
+		if err := t.fn(e); err != nil {
 			log.Fatalf("%s: %v", t.name, err)
 		}
 	}
 	fmt.Println("ALL EXERCISES PASSED")
 }
 
-// ---------- helpers ----------
-
-func (e *testEnv) do(method, path string, body any, bearer, cookieVal string) (*http.Response, []byte, error) {
-	var rdr io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
+func setupFixtures(ctx context.Context, e *env, authSvc *service.AuthService) error {
+	regs := []struct {
+		email, role string
+		idStore     *string
+		tokStore    *string
+	}{
+		{adminEmail, "admin", &e.adminID, &e.adminTok},
+		{editorEmail, "editor", &e.editorID, &e.editorTok},
+		{userEmail, "", &e.userID, &e.userTok},
+	}
+	for _, r := range regs {
+		u, err := authSvc.Register(ctx, service.RegisterInput{
+			Email: r.email, Password: sharedPass, FullName: r.email,
+		})
 		if err != nil {
-			return nil, nil, err
+			return fmt.Errorf("register %s: %w", r.email, err)
 		}
-		rdr = bytes.NewReader(b)
+		*r.idStore = u.ID.String()
+		if r.role != "" {
+			role, err := e.roleRepo.GetByName(ctx, e.pool, r.role)
+			if err != nil {
+				return fmt.Errorf("lookup role %s: %w", r.role, err)
+			}
+			if err := e.userRepo.AssignRole(ctx, e.pool, u.ID, role.ID); err != nil {
+				return err
+			}
+		}
+		pair, err := authSvc.Login(ctx, service.LoginInput{Email: r.email, Password: sharedPass}, nil, nil)
+		if err != nil {
+			return fmt.Errorf("login %s: %w", r.email, err)
+		}
+		*r.tokStore = pair.AccessToken
+	}
+	return nil
+}
+
+func (e *env) do(method, path, body, bearer string) (int, []byte, error) {
+	var rdr io.Reader
+	if body != "" {
+		rdr = bytes.NewBufferString(body)
 	}
 	req, err := http.NewRequestWithContext(e.ctx, method, e.base+path, rdr)
 	if err != nil {
-		return nil, nil, err
+		return 0, nil, err
 	}
-	if body != nil {
+	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	if cookieVal != "" {
-		req.AddCookie(&http.Cookie{Name: cookieName, Value: cookieVal})
-	}
 	resp, err := e.client.Do(req)
 	if err != nil {
-		return nil, nil, err
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, b, err
+}
+
+func (e *env) doExpectErr(method, path, body, bearer string, wantStatus int, wantCode string) error {
+	status, respBody, err := e.do(method, path, body, bearer)
 	if err != nil {
-		return nil, nil, err
-	}
-	return resp, data, nil
-}
-
-func findCookie(resp *http.Response, name string) *http.Cookie {
-	for _, c := range resp.Cookies() {
-		if c.Name == name {
-			return c
-		}
-	}
-	return nil
-}
-
-func parseError(body []byte) (dto.ErrorEnvelope, error) {
-	var e dto.ErrorEnvelope
-	err := json.Unmarshal(body, &e)
-	return e, err
-}
-
-func expectStatus(resp *http.Response, body []byte, want int) error {
-	if resp.StatusCode != want {
-		return fmt.Errorf("status=%d want=%d body=%s", resp.StatusCode, want, body)
-	}
-	return nil
-}
-
-func expectErrCode(resp *http.Response, body []byte, wantStatus int, wantCode string) error {
-	if err := expectStatus(resp, body, wantStatus); err != nil {
 		return err
 	}
-	env, err := parseError(body)
-	if err != nil {
-		return fmt.Errorf("unmarshal error envelope: %w (body=%s)", err, body)
+	if status != wantStatus {
+		return fmt.Errorf("%s %s: status=%d want=%d body=%s", method, path, status, wantStatus, respBody)
 	}
-	if env.Error.Code != wantCode {
-		return fmt.Errorf("code=%q want=%q body=%s", env.Error.Code, wantCode, body)
+	if wantCode != "" {
+		var env dto.ErrorEnvelope
+		if err := json.Unmarshal(respBody, &env); err != nil {
+			return fmt.Errorf("%s %s: unmarshal: %w body=%s", method, path, err, respBody)
+		}
+		if env.Error.Code != wantCode {
+			return fmt.Errorf("%s %s: code=%q want=%q body=%s", method, path, env.Error.Code, wantCode, respBody)
+		}
 	}
 	return nil
 }
 
 func cleanup(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := pool.Exec(ctx,
-		`DELETE FROM audit_logs WHERE actor_user_id = (SELECT id FROM users WHERE email = $1)`,
-		testEmail); err != nil {
+		`DELETE FROM audit_logs WHERE actor_user_id IN (SELECT id FROM users WHERE email IN ($1,$2,$3) OR email LIKE 'hc2-%')`,
+		adminEmail, editorEmail, userEmail); err != nil {
 		return err
 	}
-	_, err := pool.Exec(ctx, `DELETE FROM users WHERE email = $1`, testEmail)
-	return err
-}
-
-// ---------- test cases ----------
-
-func test01(e *testEnv) error {
-	start := time.Now()
-	resp, body, err := e.do("POST", "/api/v1/auth/register", map[string]string{
-		"email": testEmail, "password": testPassword, "full_name": "HTTP Check",
-	}, "", "")
-	if err != nil {
+	if _, err := pool.Exec(ctx,
+		`DELETE FROM users WHERE email IN ($1,$2,$3) OR email LIKE 'hc2-%'`,
+		adminEmail, editorEmail, userEmail); err != nil {
 		return err
 	}
-	elapsed := time.Since(start)
-	if err := expectStatus(resp, body, 201); err != nil {
+	if _, err := pool.Exec(ctx, `DELETE FROM role_permissions WHERE role_id IN (SELECT id FROM roles WHERE name LIKE 'hc2-%')`); err != nil {
 		return err
 	}
-	var parsed dto.RegisterResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return fmt.Errorf("unmarshal: %w body=%s", err, body)
+	if _, err := pool.Exec(ctx, `DELETE FROM user_roles WHERE role_id IN (SELECT id FROM roles WHERE name LIKE 'hc2-%')`); err != nil {
+		return err
 	}
-	if parsed.ID == "" || parsed.Email != testEmail || parsed.FullName != "HTTP Check" {
-		return fmt.Errorf("unexpected body: %s", body)
+	if _, err := pool.Exec(ctx, `DELETE FROM roles WHERE name LIKE 'hc2-%'`); err != nil {
+		return err
 	}
-	if strings.Contains(string(body), "password") {
-		return fmt.Errorf("register response leaks password: %s", body)
+	if _, err := pool.Exec(ctx, `DELETE FROM role_permissions WHERE permission_id IN (SELECT id FROM permissions WHERE code LIKE 'hc2.%')`); err != nil {
+		return err
 	}
-	if elapsed < 10*time.Millisecond {
-		return fmt.Errorf("register suspiciously fast (%v) — Argon2id should take ~40ms", elapsed)
+	if _, err := pool.Exec(ctx, `DELETE FROM permissions WHERE code LIKE 'hc2.%'`); err != nil {
+		return err
 	}
-	fmt.Printf("registered id=%s elapsed=%v\n", parsed.ID, elapsed.Round(time.Millisecond))
 	return nil
 }
 
-func test02(e *testEnv) error {
-	resp, body, err := e.do("POST", "/api/v1/auth/register", map[string]string{
-		"email": testEmail, "password": testPassword, "full_name": "Dup",
-	}, "", "")
-	if err != nil {
-		return err
+func sectionA(e *env) error {
+	type route struct{ method, path string }
+	routes := []route{
+		{"GET", "/api/v1/users"},
+		{"POST", "/api/v1/users"},
+		{"GET", "/api/v1/users/" + e.adminID},
+		{"PATCH", "/api/v1/users/" + e.adminID},
+		{"DELETE", "/api/v1/users/" + e.adminID},
+		{"PATCH", "/api/v1/users/" + e.adminID + "/status"},
+		{"GET", "/api/v1/users/" + e.adminID + "/roles"},
+		{"POST", "/api/v1/users/" + e.adminID + "/roles"},
+		{"DELETE", "/api/v1/users/" + e.adminID + "/roles/" + e.adminID},
+		{"GET", "/api/v1/users/" + e.adminID + "/permissions"},
+		{"GET", "/api/v1/roles"},
+		{"POST", "/api/v1/roles"},
+		{"GET", "/api/v1/roles/" + e.adminID},
+		{"PATCH", "/api/v1/roles/" + e.adminID},
+		{"DELETE", "/api/v1/roles/" + e.adminID},
+		{"GET", "/api/v1/roles/" + e.adminID + "/permissions"},
+		{"POST", "/api/v1/roles/" + e.adminID + "/permissions"},
+		{"DELETE", "/api/v1/roles/" + e.adminID + "/permissions/" + e.adminID},
+		{"GET", "/api/v1/permissions"},
+		{"POST", "/api/v1/permissions"},
+		{"GET", "/api/v1/permissions/" + e.adminID},
+		{"PATCH", "/api/v1/permissions/" + e.adminID},
+		{"DELETE", "/api/v1/permissions/" + e.adminID},
 	}
-	if err := expectErrCode(resp, body, 409, dto.CodeConflict); err != nil {
-		return err
+	for _, rt := range routes {
+		if err := e.doExpectErr(rt.method, rt.path, "", "", 401, dto.CodeUnauthorized); err != nil {
+			return err
+		}
 	}
-	fmt.Println("duplicate email: 409 conflict")
+	fmt.Printf("%d protected routes all return 401 without auth\n", len(routes))
 	return nil
 }
 
-func test03(e *testEnv) error {
-	resp, body, err := e.do("POST", "/api/v1/auth/register", map[string]string{
-		"email": "not-an-email", "password": testPassword, "full_name": "X",
-	}, "", "")
-	if err != nil {
-		return err
+func sectionB(e *env) error {
+	type route struct{ method, path, body string }
+	routes := []route{
+		{"GET", "/api/v1/users", ""},
+		{"POST", "/api/v1/users", `{"email":"hc2-b1@example.com","password":"` + sharedPass + `","full_name":"B1"}`},
+		{"GET", "/api/v1/users/" + e.adminID, ""},
+		{"PATCH", "/api/v1/users/" + e.adminID, `{}`},
+		{"PATCH", "/api/v1/users/" + e.adminID + "/status", `{"is_active":true}`},
+		{"GET", "/api/v1/users/" + e.adminID + "/roles", ""},
+		{"GET", "/api/v1/users/" + e.adminID + "/permissions", ""},
+		{"GET", "/api/v1/roles", ""},
+		{"POST", "/api/v1/roles", `{"name":"hc2-b-role"}`},
+		{"GET", "/api/v1/roles/" + e.adminID, ""},
+		{"PATCH", "/api/v1/roles/" + e.adminID, `{}`},
+		{"GET", "/api/v1/roles/" + e.adminID + "/permissions", ""},
+		{"GET", "/api/v1/permissions", ""},
+		{"POST", "/api/v1/permissions", `{"code":"hc2.b.perm"}`},
+		{"GET", "/api/v1/permissions/" + e.adminID, ""},
+		{"PATCH", "/api/v1/permissions/" + e.adminID, `{}`},
 	}
-	if err := expectErrCode(resp, body, 422, dto.CodeInvalidInput); err != nil {
-		return err
+	for _, rt := range routes {
+		status, body, err := e.do(rt.method, rt.path, rt.body, e.adminTok)
+		if err != nil {
+			return err
+		}
+		if status == 401 || status == 403 {
+			return fmt.Errorf("admin got %d on %s %s — admin should be allowed. body=%s",
+				status, rt.method, rt.path, body)
+		}
 	}
-	fmt.Println("invalid email: 422 invalid_input")
+	fmt.Printf("admin passed %d routes without 401/403\n", len(routes))
 	return nil
 }
 
-func test04(e *testEnv) error {
-	resp, body, err := e.do("POST", "/api/v1/auth/register", map[string]string{
-		"email": "short@example.com", "password": "short", "full_name": "X",
-	}, "", "")
-	if err != nil {
-		return err
+func sectionC1(e *env) error {
+	check := []struct{ method, path string }{
+		{"GET", "/api/v1/roles"},
+		{"POST", "/api/v1/roles"},
+		{"GET", "/api/v1/permissions"},
+		{"POST", "/api/v1/permissions"},
 	}
-	if err := expectErrCode(resp, body, 422, dto.CodeInvalidInput); err != nil {
-		return err
+	for _, rt := range check {
+		if err := e.doExpectErr(rt.method, rt.path, "", e.editorTok, 403, dto.CodeForbidden); err != nil {
+			return err
+		}
 	}
-	fmt.Println("short password: 422 invalid_input")
+	fmt.Printf("editor got 403 on %d role/permission routes\n", len(check))
 	return nil
 }
 
-func test05(e *testEnv) error {
-	start := time.Now()
-	resp, body, err := e.do("POST", "/api/v1/auth/login", map[string]string{
-		"email": testEmail, "password": testPassword,
-	}, "", "")
-	if err != nil {
-		return err
+func sectionC2(e *env) error {
+	check := []struct {
+		method, path, body string
+	}{
+		{"POST", "/api/v1/users", `{"email":"x@y.com","password":"` + sharedPass + `","full_name":"x"}`},
+		{"DELETE", "/api/v1/users/" + e.adminID, ""},
 	}
-	elapsed := time.Since(start)
-	if err := expectStatus(resp, body, 200); err != nil {
-		return err
+	for _, rt := range check {
+		if err := e.doExpectErr(rt.method, rt.path, rt.body, e.editorTok, 403, dto.CodeForbidden); err != nil {
+			return err
+		}
 	}
-	if elapsed < 5*time.Millisecond {
-		return fmt.Errorf("login suspiciously fast (%v)", elapsed)
-	}
-	var parsed dto.LoginResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return fmt.Errorf("unmarshal: %w", err)
-	}
-	if parsed.AccessToken == "" || parsed.TokenType != "Bearer" || parsed.ExpiresIn <= 0 {
-		return fmt.Errorf("bad body: %s", body)
-	}
-	if parsed.RefreshToken == "" {
-		return fmt.Errorf("body missing refresh_token")
-	}
-	c := findCookie(resp, cookieName)
-	if c == nil || c.Value == "" {
-		return fmt.Errorf("missing Set-Cookie: %s", body)
-	}
-	if !c.HttpOnly {
-		return fmt.Errorf("cookie not HttpOnly")
-	}
-	if c.SameSite != http.SameSiteStrictMode {
-		return fmt.Errorf("cookie SameSite not Strict (got %v)", c.SameSite)
-	}
-	if c.Path != "/api/v1/auth" {
-		return fmt.Errorf("cookie Path=%q", c.Path)
-	}
-	if c.MaxAge <= 0 {
-		return fmt.Errorf("cookie MaxAge=%d", c.MaxAge)
-	}
-	e.accessToken = parsed.AccessToken
-	e.refreshToken = parsed.RefreshToken
-	fmt.Printf("login ok expires_in=%d elapsed=%v cookie_httponly=%v\n",
-		parsed.ExpiresIn, elapsed.Round(time.Millisecond), c.HttpOnly)
+	fmt.Printf("editor got 403 on %d user.create/delete routes\n", len(check))
 	return nil
 }
 
-func test06(e *testEnv) error {
-	start := time.Now()
-	resp, body, err := e.do("POST", "/api/v1/auth/login", map[string]string{
-		"email": testEmail, "password": "wrong-password-123",
-	}, "", "")
-	if err != nil {
-		return err
+func sectionC3(e *env) error {
+	check := []struct {
+		method, path, body string
+	}{
+		{"POST", "/api/v1/users", `{"email":"x@y.com","password":"` + sharedPass + `","full_name":"x"}`},
+		{"PATCH", "/api/v1/users/" + e.adminID, `{}`},
+		{"DELETE", "/api/v1/users/" + e.adminID, ""},
+		{"GET", "/api/v1/roles", ""},
+		{"GET", "/api/v1/permissions", ""},
 	}
-	elapsed := time.Since(start)
-	if err := expectErrCode(resp, body, 401, dto.CodeUnauthorized); err != nil {
-		return err
+	for _, rt := range check {
+		if err := e.doExpectErr(rt.method, rt.path, rt.body, e.userTok, 403, dto.CodeForbidden); err != nil {
+			return err
+		}
 	}
-	if c := findCookie(resp, cookieName); c != nil {
-		return fmt.Errorf("failed login must not set cookie: %+v", c)
-	}
-	if elapsed < 5*time.Millisecond {
-		return fmt.Errorf("wrong-password login suspiciously fast (%v)", elapsed)
-	}
-	fmt.Printf("wrong password: 401 elapsed=%v\n", elapsed.Round(time.Millisecond))
+	fmt.Printf("plain user got 403 on %d privileged routes\n", len(check))
 	return nil
 }
 
-func test07(e *testEnv) error {
-	resp, body, err := e.do("GET", "/api/v1/auth/me", nil, e.accessToken, "")
+func sectionD1(e *env) error {
+	if err := e.doExpectErr("GET", "/api/v1/does-not-exist", "", "", 404, dto.CodeNotFound); err != nil {
+		return err
+	}
+	fmt.Println("NoRoute → 404 envelope")
+	return nil
+}
+
+func sectionD2(e *env) error {
+	if err := e.doExpectErr("GET", "/api/v1/users/not-a-uuid", "", e.adminTok, 400, dto.CodeInvalidInput); err != nil {
+		return err
+	}
+	fmt.Println("malformed UUID → 400 invalid_input (not 404)")
+	return nil
+}
+
+var createdUserID string
+
+func sectionE1(e *env) error {
+	status, body, err := e.do("POST", "/api/v1/users",
+		`{"email":"hc2-target@example.com","password":"`+sharedPass+`","full_name":"HC2 Target"}`,
+		e.adminTok)
 	if err != nil {
 		return err
 	}
-	if err := expectStatus(resp, body, 200); err != nil {
+	if status != 201 {
+		return fmt.Errorf("status=%d body=%s", status, body)
+	}
+	var u dto.UserView
+	if err := json.Unmarshal(body, &u); err != nil {
 		return err
 	}
-	var parsed dto.MeResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return fmt.Errorf("unmarshal: %w body=%s", err, body)
+	createdUserID = u.ID
+	fmt.Printf("created: id=%s\n", u.ID)
+	return nil
+}
+
+func sectionE2(e *env) error {
+	status, body, err := e.do("GET", "/api/v1/users/"+createdUserID, "", e.adminTok)
+	if err != nil {
+		return err
 	}
-	if parsed.User.ID == "" || parsed.User.Email != testEmail {
-		return fmt.Errorf("bad user: %+v", parsed.User)
+	if status != 200 {
+		return fmt.Errorf("status=%d body=%s", status, body)
 	}
-	if strings.Contains(string(body), "password") {
-		return fmt.Errorf("me response leaks password: %s", body)
+	var u dto.UserView
+	if err := json.Unmarshal(body, &u); err != nil {
+		return err
+	}
+	if u.FullName != "HC2 Target" {
+		return fmt.Errorf("full_name=%q", u.FullName)
+	}
+	fmt.Println("get user → 200")
+	return nil
+}
+
+func sectionE3(e *env) error {
+	status, body, err := e.do("PATCH", "/api/v1/users/"+createdUserID,
+		`{"full_name":"HC2 Renamed"}`, e.adminTok)
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("status=%d body=%s", status, body)
+	}
+	var u dto.UserView
+	if err := json.Unmarshal(body, &u); err != nil {
+		return err
+	}
+	if u.FullName != "HC2 Renamed" {
+		return fmt.Errorf("full_name=%q", u.FullName)
+	}
+	fmt.Println("update user → 200")
+	return nil
+}
+
+func sectionE4(e *env) error {
+	if err := e.doExpectErr("PATCH", "/api/v1/users/"+createdUserID+"/status",
+		`{"is_active":false}`, e.adminTok, 204, ""); err != nil {
+		return err
+	}
+	if err := e.doExpectErr("PATCH", "/api/v1/users/"+createdUserID+"/status",
+		`{"is_active":true}`, e.adminTok, 204, ""); err != nil {
+		return err
+	}
+	fmt.Println("deactivate + reactivate → 204")
+	return nil
+}
+
+func sectionE5(e *env) error {
+	status, body, err := e.do("GET", "/api/v1/users/"+createdUserID+"/roles", "", e.adminTok)
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("status=%d body=%s", status, body)
+	}
+	var resp dto.UserRolesResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return err
 	}
 	hasUserRole := false
-	for _, r := range parsed.Roles {
+	for _, r := range resp.Roles {
 		if r.Name == "user" {
 			hasUserRole = true
 		}
 	}
 	if !hasUserRole {
-		return fmt.Errorf("missing 'user' role: %+v", parsed.Roles)
+		return fmt.Errorf("expected 'user' role, got %v", resp.Roles)
 	}
-	hasReadPerm := false
-	for _, p := range parsed.Permissions {
-		if p.Code == "user.read" {
-			hasReadPerm = true
-		}
-	}
-	if !hasReadPerm {
-		return fmt.Errorf("missing 'user.read' permission: %+v", parsed.Permissions)
-	}
-	fmt.Printf("me: user=%s roles=%d perms=%d\n", parsed.User.ID, len(parsed.Roles), len(parsed.Permissions))
+	fmt.Printf("get roles → 200, %d roles\n", len(resp.Roles))
 	return nil
 }
 
-func test08(e *testEnv) error {
-	resp, body, err := e.do("GET", "/api/v1/auth/me", nil, "", "")
+func sectionE6(e *env) error {
+	editor, err := e.roleRepo.GetByName(e.ctx, e.pool, "editor")
 	if err != nil {
 		return err
 	}
-	if err := expectErrCode(resp, body, 401, dto.CodeUnauthorized); err != nil {
+	status, body, err := e.do("POST", "/api/v1/users/"+createdUserID+"/roles",
+		`{"role_id":"`+editor.ID.String()+`"}`, e.adminTok)
+	if err != nil {
 		return err
 	}
-	fmt.Println("me without auth: 401")
+	if status != 204 {
+		return fmt.Errorf("assign status=%d body=%s", status, body)
+	}
+	status, body, err = e.do("GET", "/api/v1/users/"+createdUserID+"/roles", "", e.adminTok)
+	if err != nil {
+		return err
+	}
+	var resp dto.UserRolesResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return err
+	}
+	if len(resp.Roles) != 2 {
+		return fmt.Errorf("after assign: %d roles, expected 2", len(resp.Roles))
+	}
+	status, body, err = e.do("DELETE", "/api/v1/users/"+createdUserID+"/roles/"+editor.ID.String(),
+		"", e.adminTok)
+	if err != nil {
+		return err
+	}
+	if status != 204 {
+		return fmt.Errorf("remove status=%d body=%s", status, body)
+	}
+	fmt.Println("assign + remove role → 204 both")
 	return nil
 }
 
-func test09(e *testEnv) error {
-	resp, body, err := e.do("GET", "/api/v1/auth/me", nil, "garbage-not-a-jwt", "")
-	if err != nil {
+func sectionE7(e *env) error {
+	if err := e.doExpectErr("DELETE", "/api/v1/users/"+createdUserID, "", e.adminTok, 204, ""); err != nil {
 		return err
 	}
-	if err := expectErrCode(resp, body, 401, dto.CodeUnauthorized); err != nil {
-		return err
-	}
-	fmt.Println("me with garbage bearer: 401")
+	fmt.Println("delete user → 204")
 	return nil
 }
 
-func test10(e *testEnv) error {
-	req, err := http.NewRequestWithContext(e.ctx, "GET", e.base+"/api/v1/auth/me", nil)
-	if err != nil {
+func sectionE8(e *env) error {
+	if err := e.doExpectErr("GET", "/api/v1/users/"+createdUserID, "", e.adminTok, 404, dto.CodeNotFound); err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
-	resp, err := e.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if err := expectErrCode(resp, body, 401, dto.CodeUnauthorized); err != nil {
-		return err
-	}
-	fmt.Println("me with Basic auth: 401")
+	fmt.Println("deleted user → 404")
 	return nil
 }
 
-func test11(e *testEnv) error {
-	oldRaw := e.refreshToken
-	resp, body, err := e.do("POST", "/api/v1/auth/refresh", nil, "", oldRaw)
+var createdRoleID string
+
+func sectionF1(e *env) error {
+	status, body, err := e.do("POST", "/api/v1/roles", `{"name":"hc2-test-role"}`, e.adminTok)
 	if err != nil {
 		return err
 	}
-	if err := expectStatus(resp, body, 200); err != nil {
+	if status != 201 {
+		return fmt.Errorf("status=%d body=%s", status, body)
+	}
+	var r dto.RoleView
+	if err := json.Unmarshal(body, &r); err != nil {
 		return err
 	}
-	var parsed dto.RefreshResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return fmt.Errorf("unmarshal: %w body=%s", err, body)
-	}
-	if parsed.AccessToken == "" {
-		return fmt.Errorf("no access_token")
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return err
-	}
-	if _, ok := raw["refresh_token"]; ok {
-		return fmt.Errorf("refresh response must NOT include refresh_token in body: %s", body)
-	}
-	c := findCookie(resp, cookieName)
-	if c == nil || c.Value == "" {
-		return fmt.Errorf("refresh must set new cookie")
-	}
-	if c.Value == oldRaw {
-		return fmt.Errorf("refresh token not rotated")
-	}
-	e.accessToken = parsed.AccessToken
-	e.previousRefreshTok = oldRaw
-	e.refreshToken = c.Value
-	fmt.Printf("refresh rotated old_len=%d new_len=%d\n", len(oldRaw), len(c.Value))
+	createdRoleID = r.ID
+	fmt.Printf("created role: id=%s\n", r.ID)
 	return nil
 }
 
-func test12(e *testEnv) error {
-	resp, body, err := e.do("POST", "/api/v1/auth/refresh", nil, "", e.previousRefreshTok)
+func sectionF2(e *env) error {
+	desc := "updated description"
+	descJSON, _ := json.Marshal(desc)
+	status, body, err := e.do("PATCH", "/api/v1/roles/"+createdRoleID,
+		`{"description":`+string(descJSON)+`}`, e.adminTok)
 	if err != nil {
 		return err
 	}
-	if err := expectErrCode(resp, body, 401, dto.CodeUnauthorized); err != nil {
+	if status != 200 {
+		return fmt.Errorf("status=%d body=%s", status, body)
+	}
+	var r dto.RoleView
+	if err := json.Unmarshal(body, &r); err != nil {
 		return err
 	}
-	c := findCookie(resp, cookieName)
-	if c == nil {
-		return fmt.Errorf("expected Set-Cookie clearing the refresh token")
+	if r.Description == nil || *r.Description != desc {
+		return fmt.Errorf("description=%v", r.Description)
 	}
-	if c.Value != "" || c.MaxAge > 0 {
-		return fmt.Errorf("cookie not cleared: value=%q maxage=%d", c.Value, c.MaxAge)
-	}
-	fmt.Println("reuse detected: 401, cookie cleared")
+	fmt.Println("update role → 200")
 	return nil
 }
 
-func test13(e *testEnv) error {
-	// Fresh login to get a valid cookie (the previous family is fully revoked).
-	loginResp, loginBody, err := e.do("POST", "/api/v1/auth/login", map[string]string{
-		"email": testEmail, "password": testPassword,
-	}, "", "")
-	if err != nil {
+func sectionF3(e *env) error {
+	status, body, err := e.do("GET", "/api/v1/permissions?limit=1", "", e.adminTok)
+	if err != nil || status != 200 {
+		return fmt.Errorf("list perms: status=%d body=%s err=%v", status, body, err)
+	}
+	var plist dto.PermissionListResponse
+	if err := json.Unmarshal(body, &plist); err != nil {
 		return err
 	}
-	if err := expectStatus(loginResp, loginBody, 200); err != nil {
-		return err
+	if len(plist.Permissions) == 0 {
+		return fmt.Errorf("no permissions available")
 	}
-	var loginParsed dto.LoginResponse
-	if err := json.Unmarshal(loginBody, &loginParsed); err != nil {
-		return err
-	}
-	loginCookie := findCookie(loginResp, cookieName)
-	if loginCookie == nil || loginCookie.Value == "" {
-		return fmt.Errorf("no cookie on login")
-	}
+	permID := plist.Permissions[0].ID
 
-	resp, body, err := e.do("POST", "/api/v1/auth/logout", nil, "", loginCookie.Value)
-	if err != nil {
+	if err := e.doExpectErr("POST", "/api/v1/roles/"+createdRoleID+"/permissions",
+		`{"permission_id":"`+permID+`"}`, e.adminTok, 204, ""); err != nil {
 		return err
 	}
-	if resp.StatusCode != 204 {
-		return fmt.Errorf("status=%d body=%s", resp.StatusCode, body)
+	status, body, err = e.do("GET", "/api/v1/roles/"+createdRoleID+"/permissions", "", e.adminTok)
+	if err != nil || status != 200 {
+		return fmt.Errorf("list: status=%d body=%s", status, body)
 	}
-	c := findCookie(resp, cookieName)
-	if c == nil || c.Value != "" {
-		return fmt.Errorf("logout must clear cookie: %+v", c)
+	var rlist dto.RolePermissionsResponse
+	if err := json.Unmarshal(body, &rlist); err != nil {
+		return err
 	}
-	e.refreshToken = loginCookie.Value
-	fmt.Println("logout: 204, cookie cleared")
+	if len(rlist.Permissions) != 1 {
+		return fmt.Errorf("expected 1 permission, got %d", len(rlist.Permissions))
+	}
+	if err := e.doExpectErr("DELETE", "/api/v1/roles/"+createdRoleID+"/permissions/"+permID,
+		"", e.adminTok, 204, ""); err != nil {
+		return err
+	}
+	fmt.Println("add + list + remove permission → all 2xx")
 	return nil
 }
 
-func test14(e *testEnv) error {
-	resp, body, err := e.do("POST", "/api/v1/auth/refresh", nil, "", e.refreshToken)
-	if err != nil {
+func sectionF4(e *env) error {
+	if err := e.doExpectErr("DELETE", "/api/v1/roles/"+createdRoleID, "", e.adminTok, 204, ""); err != nil {
 		return err
 	}
-	if err := expectErrCode(resp, body, 401, dto.CodeUnauthorized); err != nil {
-		return err
-	}
-	fmt.Println("refresh after logout: 401")
+	fmt.Println("delete role → 204")
 	return nil
 }
 
-func test15(e *testEnv) error {
-	loginResp, loginBody, err := e.do("POST", "/api/v1/auth/login", map[string]string{
-		"email": testEmail, "password": testPassword,
-	}, "", "")
-	if err != nil {
-		return err
-	}
-	if err := expectStatus(loginResp, loginBody, 200); err != nil {
-		return err
-	}
-	var parsed dto.LoginResponse
-	if err := json.Unmarshal(loginBody, &parsed); err != nil {
-		return err
-	}
-	loginCookie := findCookie(loginResp, cookieName)
-	if loginCookie == nil {
-		return fmt.Errorf("no cookie")
-	}
+var createdPermID string
 
-	resp, body, err := e.do("POST", "/api/v1/auth/logout-all", nil, parsed.AccessToken, "")
+func sectionG1(e *env) error {
+	status, body, err := e.do("POST", "/api/v1/permissions", `{"code":"hc2.test.perm"}`, e.adminTok)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode != 204 {
-		return fmt.Errorf("status=%d body=%s", resp.StatusCode, body)
+	if status != 201 {
+		return fmt.Errorf("status=%d body=%s", status, body)
 	}
-	c := findCookie(resp, cookieName)
-	if c == nil || c.Value != "" {
-		return fmt.Errorf("logout-all must clear cookie")
+	var p dto.PermissionView
+	if err := json.Unmarshal(body, &p); err != nil {
+		return err
 	}
-	e.refreshToken = loginCookie.Value
-	fmt.Println("logout-all: 204, cookie cleared")
+	createdPermID = p.ID
+	fmt.Printf("created permission: id=%s code=%s\n", p.ID, p.Code)
 	return nil
 }
 
-func test16(e *testEnv) error {
-	resp, body, err := e.do("POST", "/api/v1/auth/refresh", nil, "", e.refreshToken)
+func sectionG2(e *env) error {
+	desc := "updated description"
+	descJSON, _ := json.Marshal(desc)
+	status, body, err := e.do("PATCH", "/api/v1/permissions/"+createdPermID,
+		`{"description":`+string(descJSON)+`}`, e.adminTok)
 	if err != nil {
 		return err
 	}
-	if err := expectErrCode(resp, body, 401, dto.CodeUnauthorized); err != nil {
-		return err
+	if status != 200 {
+		return fmt.Errorf("status=%d body=%s", status, body)
 	}
-	fmt.Println("refresh after logout-all: 401")
+	fmt.Println("update permission → 200")
 	return nil
 }
 
-func test17(e *testEnv) error {
-	resp, body, err := e.do("POST", "/api/v1/auth/logout-all", nil, "", "")
-	if err != nil {
+func sectionG3(e *env) error {
+	if err := e.doExpectErr("DELETE", "/api/v1/permissions/"+createdPermID, "", e.adminTok, 204, ""); err != nil {
 		return err
 	}
-	if err := expectErrCode(resp, body, 401, dto.CodeUnauthorized); err != nil {
-		return err
-	}
-	fmt.Println("logout-all without auth: 401")
+	fmt.Println("delete permission → 204")
 	return nil
 }

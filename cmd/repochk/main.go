@@ -25,7 +25,7 @@ var (
 	userD = uuid.MustParse("aaaa0000-0000-0000-0000-000000000004") // tx commit survivor
 
 	userRoleID   = uuid.MustParse("00000000-0000-4000-8000-000000000003") // seeded "user" role
-	permUserRead = "user.read"                                            // seeded permission
+	permUserRead = "user.read.self"                                            // seeded permission
 
 	tokenID    = uuid.MustParse("bbbb0000-0000-0000-0000-000000000001")
 	auditLogID = uuid.MustParse("cccc0000-0000-0000-0000-000000000001")

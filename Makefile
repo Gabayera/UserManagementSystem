@@ -49,3 +49,24 @@ migrate-reset: db-info
 	@echo "WARNING: this will roll back ALL migrations on $$(echo '$(DATABASE_URL)' | sed -E 's#(postgres(ql)?://[^:]+):[^@]+@#\1:***@#')"
 	@read -p "Type 'yes' to continue: " CONFIRM; [ "$$CONFIRM" = "yes" ] || { echo "aborted"; exit 1; }; \
 	$(MIGRATE) -path $(MIGRATIONS_DIR) -database "$(DATABASE_URL)" down -all
+
+migrate-to:
+	@if [ -z "$(VERSION)" ]; then echo "ERROR: VERSION=N is required"; exit 1; fi
+	$(MIGRATE) -path $(MIGRATIONS_DIR) -database "$(DATABASE_URL)" goto $(VERSION)
+
+.PHONY: db-up
+db-up:
+	@if docker ps -a --format '{{.Names}}' | grep -qx um-pg; then \
+	  echo "starting existing um-pg"; docker start um-pg; \
+	else \
+	  echo "creating fresh um-pg with named volume"; \
+	  docker run --name um-pg \
+	    -e POSTGRES_PASSWORD=pass \
+	    -e POSTGRES_DB=user_management \
+	    -p 5433:5432 \
+	    -v um-pg-data:/var/lib/postgresql/data \
+	    -d postgres:16; \
+	fi
+	@timeout 30 bash -c 'until docker exec um-pg pg_isready -U postgres -d user_management >/dev/null 2>&1; do sleep 1; done' \
+	  || { echo "TIMED OUT"; docker logs --tail 30 um-pg; exit 1; }
+	@echo "um-pg ready"

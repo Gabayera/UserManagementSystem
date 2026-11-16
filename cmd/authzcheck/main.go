@@ -41,7 +41,7 @@ func buildDemoRouter(resolver service.PermissionsResolver, verifier middleware.T
 	api := r.Group("/api/v1")
 	protected := api.Group("/demo")
 	protected.Use(middleware.Auth(verifier))
-	protected.GET("/read", middleware.RequirePermission(resolver, "user.read"), demoOK)
+	protected.GET("/read", middleware.RequirePermission(resolver, "user.read.self"), demoOK)
 	protected.GET("/delete", middleware.RequirePermission(resolver, "user.delete"), demoOK)
 	protected.GET("/nonexistent", middleware.RequirePermission(resolver, "nonexistent.perm"), demoOK)
 	return r
