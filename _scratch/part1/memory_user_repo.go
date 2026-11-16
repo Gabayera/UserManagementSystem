@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"UserManagementSystem/internal/apperr"
 	"UserManagementSystem/domain"
+	"UserManagementSystem/internal/apperr"
 
 	"github.com/google/uuid"
 )
@@ -52,7 +52,7 @@ func (r *MemoryUserRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Use
 	user, ok := r.users[id]
 	r.mu.RUnlock()
 
-	if !ok || user == nil || user.DeletedAt != nil { 
+	if !ok || user == nil || user.DeletedAt != nil {
 		return nil, apperr.Wrap(apperr.ErrNotFound, "user id %s", id)
 	}
 	return user, nil
