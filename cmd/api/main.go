@@ -81,9 +81,10 @@ func main() {
 		WriteTimeout: cfg.Server.WriteTimeout,
 	}
 
+	listenErr := make(chan error, 1)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("server_listen_failed", "err", err)
+			listenErr <- err
 			stop()
 		}
 	}()
@@ -92,12 +93,24 @@ func main() {
 	<-ctx.Done()
 	slog.Info("shutdown_initiated")
 
+	var exitCode int
+	select {
+	case err := <-listenErr:
+		slog.Error("server_listen_failed", "err", err)
+		exitCode = 1
+	default:
+	}
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Warn("shutdown_error", "err", err)
 	}
 	slog.Info("shutdown_complete")
+	if exitCode != 0 {
+		pool.Close() // os.Exit skips defers
+		os.Exit(exitCode)
+	}
 }
 
 func setupLogger(cfg config.LogConfig) {
