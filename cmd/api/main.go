@@ -68,18 +68,21 @@ func main() {
 	healthH := handler.NewHealthHandler(pool)
 	authH := handler.NewAuthHandler(authSvc, cfg.Auth, cfg.Cookie)
 
+	userSvc := service.NewUserService(pool, userRepo, roleRepo, hasher, auditSvc)
+	userH := handler.NewUserHandler(userSvc)
+
+	permRepo := repository.NewPGPermissionRepo()
+	roleSvc := service.NewRoleService(pool, roleRepo, auditSvc)
+	permSvc := service.NewPermissionService(pool, permRepo, auditSvc)
+	roleH := handler.NewRoleHandler(roleSvc)
+	permH := handler.NewPermissionHandler(permSvc)
+
+	resolver := service.NewDBPermissionsResolver(pool, userRepo)
 	// 8. Adapters — bridge the DIP seam.
 	verifier := security.JWTVerifierAdapter{Issuer: jwtIssuer}
 
 	// 9. Router.
-	r, err := router.New(healthH, authH, verifier, router.Options{
-		Prod:           cfg.App.IsProd(),
-		TrustedProxies: cfg.Server.TrustedProxies,
-	})
-	if err != nil {
-		slog.Error("router_init_failed", "err", err)
-		os.Exit(1)
-	}
+	r := router.New(healthH, authH, userH, roleH, permH, verifier, resolver)
 
 	// 10. HTTP server.
 	srv := &http.Server{
