@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"UserManagementSystem/internal/apperr"
 	"UserManagementSystem/internal/repository"
 )
 
@@ -17,6 +19,7 @@ import (
 // The contract is:
 //   - Never returns nil; returns an empty non-nil map for users with no perms.
 //   - Filters out permissions granted only via soft-deleted roles.
+//   - Returns apperr.ErrUnauthorized for users that are deleted or inactive.
 //   - Does not deduplicate across roles in memory — the SQL DISTINCT already
 //     handles that (see repository.PGUserRepo.PermissionsForUser).
 type PermissionsResolver interface {
@@ -40,6 +43,19 @@ func NewDBPermissionsResolver(
 var _ PermissionsResolver = (*DBPermissionsResolver)(nil)
 
 func (r *DBPermissionsResolver) PermissionsForUser(ctx context.Context, userID uuid.UUID) (map[string]struct{}, error) {
+	// A still-valid access token must not authorize anything for a user who
+	// has since been deleted or deactivated.
+	u, err := r.userRepo.GetByID(ctx, r.pool, userID)
+	if err != nil {
+		if errors.Is(err, apperr.ErrNotFound) {
+			return nil, apperr.ErrUnauthorized
+		}
+		return nil, err
+	}
+	if !u.IsActive {
+		return nil, apperr.ErrUnauthorized
+	}
+
 	perms, err := r.userRepo.PermissionsForUser(ctx, r.pool, userID)
 	if err != nil {
 		return nil, err
