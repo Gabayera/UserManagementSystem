@@ -38,17 +38,29 @@ func main() {
 	}
 	defer pool.Close()
 
+<<<<<<< HEAD
 	hasher := security.NewPasswordHasher(cfg.Auth.MaxConcurrentHashes)
 	jwtIssuer := security.NewJWTIssuer(cfg.Auth.JWTSecret, cfg.Auth.JWTIssuer, cfg.Auth.AccessTokenTTL)
 
+=======
+	// 4. Auth primitives.
+	hasher := security.NewPasswordHasher(cfg.Auth.MaxConcurrentHashes)
+	jwtIssuer := security.NewJWTIssuer(cfg.Auth.JWTSecret, cfg.Auth.JWTIssuer, cfg.Auth.AccessTokenTTL)
+
+	// 5. Repositories and services.
+>>>>>>> 72e85af53a6add245619a68d7c41454746c6adf7
 	userRepo := repository.NewPGUserRepo()
 	roleRepo := repository.NewPGRoleRepo()
 	permRepo := repository.NewPGPermissionRepo()
 	tokenRepo := repository.NewPGRefreshTokenRepo()
+<<<<<<< HEAD
 	auditRepo := repository.NewPGAuditLogRepo()
 
 	auditSvc := service.NewRealAudit(pool, auditRepo)
 
+=======
+	auditSvc := service.NewNoopAudit()
+>>>>>>> 72e85af53a6add245619a68d7c41454746c6adf7
 	authSvc, err := service.NewAuthService(
 		pool, userRepo, tokenRepo, roleRepo,
 		hasher, jwtIssuer, auditSvc,
@@ -59,6 +71,7 @@ func main() {
 		os.Exit(1)
 	}
 
+<<<<<<< HEAD
 	userSvc := service.NewUserService(pool, userRepo, roleRepo, hasher, auditSvc)
 	roleSvc := service.NewRoleService(pool, roleRepo, auditSvc)
 	permSvc := service.NewPermissionService(pool, permRepo, auditSvc)
@@ -73,6 +86,20 @@ func main() {
 		handler.NewPermissionHandler(permSvc),
 		verifier, resolver,
 	)
+=======
+	// 6. Handlers and router.
+	healthH := handler.NewHealthHandler(pool)
+	authH := handler.NewAuthHandler(authSvc, cfg.Auth, cfg.Cookie)
+	verifier := security.JWTVerifierAdapter{Issuer: jwtIssuer}
+	r, err := router.New(healthH, authH, verifier, router.Options{
+		Prod:           cfg.App.IsProd(),
+		TrustedProxies: cfg.Server.TrustedProxies,
+	})
+	if err != nil {
+		slog.Error("router_init_failed", "err", err)
+		os.Exit(1)
+	}
+>>>>>>> 72e85af53a6add245619a68d7c41454746c6adf7
 
 	srv := &http.Server{
 		Addr:         cfg.Server.Addr,
