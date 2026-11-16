@@ -5,8 +5,8 @@ import (
 	"errors"
 	"strings"
 
-	"UserManagementSystem/internal/apperr"
 	"UserManagementSystem/domain"
+	"UserManagementSystem/internal/apperr"
 	"UserManagementSystem/repository"
 
 	"github.com/google/uuid"
